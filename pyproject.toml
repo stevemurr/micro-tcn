@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=61"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,12 +8,12 @@ version = "0.1.0"
 description = "Efficient neural networks for real-time modeling of analog dynamic range compression"
 readme = "README.md"
 requires-python = ">=3.8"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [
     { name = "Christian Steinmetz", email = "c.j.steinmetz@qmul.ac.uk" },
 ]
 classifiers = [
-    "License :: OSI Approved :: Apache Software License",
     "Topic :: Multimedia :: Sound/Audio",
     "Topic :: Scientific/Engineering",
 ]
