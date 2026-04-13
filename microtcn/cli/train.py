@@ -5,6 +5,7 @@ import pytorch_lightning as pl
 import torch
 import torchsummary
 import typer
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 from microtcn.data import SignalTrainLA2ADataset
 from microtcn.lstm import LSTMModel
@@ -58,6 +59,8 @@ def _run_training(
     train_length: int,
     eval_length: int,
     gpus: int,
+    lr: float,
+    precision: str,
 ):
     print(f"* Training config {idx + 1}/{total}")
     print(config)
@@ -65,7 +68,7 @@ def _run_training(
     pl.seed_everything(42)
 
     max_epochs = config.get("max_epochs", 60)
-    precision = 16
+    use_fp16_data = precision == "16-mixed"
 
     model_type = config["model_type"]
     if model_type == "tcn":
@@ -86,18 +89,29 @@ def _run_training(
     default_root_dir = os.path.join("lightning_logs", "bulk", specifier)
     print(default_root_dir)
 
+    checkpoint_callback = ModelCheckpoint(
+        monitor="val_loss",
+        mode="min",
+        save_top_k=3,
+        save_last=True,
+        filename="epoch={epoch:02d}-val={val_loss:.4f}",
+        auto_insert_metric_name=False,
+    )
+
     trainer = pl.Trainer(
         default_root_dir=default_root_dir,
         max_epochs=max_epochs,
         precision=precision,
-        gpus=gpus if gpus > 0 else None,
+        accelerator="gpu" if gpus > 0 else "cpu",
+        devices=gpus if gpus > 0 else 1,
+        callbacks=[checkpoint_callback],
     )
 
     train_dataset = SignalTrainLA2ADataset(
         root_dir,
         subset="train",
         fraction=config["train_fraction"],
-        half=precision == 16,
+        half=use_fp16_data,
         preload=preload,
         length=train_length,
     )
@@ -112,7 +126,7 @@ def _run_training(
     val_dataset = SignalTrainLA2ADataset(
         root_dir,
         preload=preload,
-        half=precision == 16,
+        half=use_fp16_data,
         subset="val",
         length=eval_length,
     )
@@ -124,7 +138,7 @@ def _run_training(
         pin_memory=True,
     )
 
-    model_kwargs = {"nparams": 2}
+    model_kwargs = {"nparams": 2, "lr": lr}
     if "train_loss" in config:
         model_kwargs["train_loss"] = config["train_loss"]
 
@@ -163,12 +177,14 @@ def train(
     train_fraction: float = typer.Option(1.0, help="Fraction of training data to use."),
     batch_size: int = typer.Option(32),
     max_epochs: int = typer.Option(60),
+    lr: float = typer.Option(1e-3, help="Adam learning rate."),
     train_loss: Optional[str] = typer.Option(None, help="Override training loss (e.g. 'l1')."),
     train_length: int = typer.Option(65536),
     eval_length: int = typer.Option(131072),
     num_workers: int = typer.Option(16),
     preload: bool = typer.Option(False),
     gpus: int = typer.Option(1, help="Number of GPUs (0 for CPU)."),
+    precision: str = typer.Option("bf16-mixed", help="Trainer precision: 'bf16-mixed', '16-mixed', or '32-true'."),
 ):
     """Train a single TCN or LSTM model."""
     config: dict = {
@@ -204,6 +220,8 @@ def train(
         train_length=train_length,
         eval_length=eval_length,
         gpus=gpus,
+        lr=lr,
+        precision=precision,
     )
 
 
@@ -214,6 +232,8 @@ def train_all(
     train_length: int = typer.Option(65536),
     eval_length: int = typer.Option(131072),
     gpus: int = typer.Option(1, help="Number of GPUs (0 for CPU)."),
+    lr: float = typer.Option(1e-3, help="Adam learning rate."),
+    precision: str = typer.Option("bf16-mixed", help="Trainer precision: 'bf16-mixed', '16-mixed', or '32-true'."),
 ):
     """Run the full sweep of training configurations from the paper."""
     total = len(TRAIN_CONFIGS)
@@ -228,4 +248,6 @@ def train_all(
             train_length=train_length,
             eval_length=eval_length,
             gpus=gpus,
+            lr=lr,
+            precision=precision,
         )

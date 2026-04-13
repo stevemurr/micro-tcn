@@ -19,8 +19,8 @@ class Base(pl.LightningModule):
             save_dir (str): Path to save audio examples from validation to disk. Default: None
             num_examples (int, optional): Number of evaluation audio examples to log after each epochs. Default: 4
         """
-    def __init__(self, 
-                    lr = 3e-4, 
+    def __init__(self,
+                    lr = 1e-3,
                     train_loss = "l1+stft",
                     save_dir = None,
                     num_examples = 4,
