@@ -5,7 +5,6 @@ import torch
 import torchaudio
 import numpy as np
 import soundfile as sf
-torchaudio.set_audio_backend("sox_io")
 
 class SignalTrainLA2ADataset(torch.utils.data.Dataset):
     """ SignalTrain LA2A dataset. Source: [10.5281/zenodo.3824876](https://zenodo.org/record/3824876)."""

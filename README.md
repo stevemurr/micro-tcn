@@ -31,19 +31,19 @@ cd lightning_logs/
 unzip models.zip 
 ```
 
-Use the `compy.py` script in order to process audio files. 
+Use the `microtcn comp` command to process audio files.
 Below is an example of how to run the TCN-300-C pre-trained model on GPU.
-This will process all the files in the `audio/` directory with the limit mode engaged and a peak reduction of 42. 
+This will process all the files in the `audio/` directory with the limit mode engaged and a peak reduction of 42.
 
 ```
-python comp.py -i audio/ --limit 1 --peak_red 42 --gpu
+uv run microtcn comp -i audio/ --limit 1 --peak-red 0.42 --gpu
 ```
 
-If you want to hear the output of a different model, you can pass the ``--model_id`` flag. 
-To view the available pre-trained models (once you have downloaded them) run the following.
+If you want to hear the output of a different model, pass ``--model-id``.
+To view the available pre-trained models (once you have downloaded them) run:
 
 ```
-python comp.py --list_models
+uv run microtcn comp --list-models
 
 Found 13 models in ./lightning_logs/bulk
 1-uTCN-300__causal__4-10-13__fraction-0.01-bs32
@@ -70,28 +70,29 @@ With this, you can then run the same evaluation pipeline used for reporting the 
 If you would like to do this on GPU, perform the following command. 
 
 ```
-python test.py \
---root_dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
---half \
---preload \
---eval_subset test \
---save_dir test_audio \
+uv run microtcn test \
+    --root-dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
+    --half \
+    --preload \
+    --eval-subset test \
+    --save-dir test_audio
 ```
 
-In this case, not only will the metrics be printed to terminal, we will also save out all of the processed audio from the test set to disk in the `test_audio/` directory.
-If you would like to run the tests across the entire dataset you can specific a different string after the `--eval_subset` flag, as either `train`, `val`, or `full`.
+Metrics will be printed to the terminal and processed audio from the test set will be written to `test_audio/`.
+Swap `--eval-subset` for `train`, `val`, or `full` to run the tests across a different split.
 
 ## Training
 
-If would like to re-train the models in the paper, you can run the training script which will train all the models one by one. 
+To re-train all the models in the paper as a sweep:
 
 ```
-python train.py \ 
---root_dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
---precision 16 \
---preload \
---gpus 1 \
+uv run microtcn train-all \
+    --root-dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
+    --preload \
+    --gpus 1
 ```
+
+To train a single architecture, use `microtcn train` with the desired flags (see `microtcn train --help`).
 
 ## Plugin
 
