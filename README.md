@@ -15,17 +15,11 @@ Efficient neural networks for real-time modeling of analog dynamic range compres
 
 ## Setup
 
-Install the requirements.
+Install dependencies with [uv](https://docs.astral.sh/uv/):
 ```
-python3 -m venv env/
-source env/bin/activate
-pip install -r requirements.txt
+uv sync
 ```
-
-Then install auraloss.
-```
-pip install git+https://github.com/csteinmetz1/auraloss
-```
+This creates a `.venv/` and installs everything from `pyproject.toml` / `uv.lock`. Activate with `source .venv/bin/activate`, or run commands directly via `uv run <cmd>`.
 
 ## Pre-trained models
 
