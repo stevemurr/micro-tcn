@@ -37,7 +37,6 @@ def test(
     test_dataset = SignalTrainLA2ADataset(
         root_dir,
         subset=eval_subset,
-        half=False,
         preload=preload,
         length=eval_length,
     )

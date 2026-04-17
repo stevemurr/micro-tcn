@@ -63,6 +63,7 @@ def _run_training(
     lr: float,
     precision: str,
     artifact_dir: str,
+    compile_model: bool,
 ):
     print(f"* Training config {idx + 1}/{total}")
     print(config)
@@ -70,7 +71,12 @@ def _run_training(
     pl.seed_everything(42)
 
     max_epochs = config.get("max_epochs", 60)
-    use_fp16_data = precision == "16-mixed"
+    if precision == "16-mixed":
+        data_dtype = torch.float16
+    elif precision == "bf16-mixed":
+        data_dtype = torch.bfloat16
+    else:
+        data_dtype = torch.float32
 
     model_type = config["model_type"]
     if model_type == "tcn":
@@ -114,7 +120,7 @@ def _run_training(
         root_dir,
         subset="train",
         fraction=config["train_fraction"],
-        half=use_fp16_data,
+        dtype=data_dtype,
         preload=preload,
         length=train_length,
     )
@@ -124,12 +130,14 @@ def _run_training(
         batch_size=config["batch_size"],
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
     )
 
     val_dataset = SignalTrainLA2ADataset(
         root_dir,
         preload=preload,
-        half=use_fp16_data,
+        dtype=data_dtype,
         subset="val",
         length=eval_length,
     )
@@ -139,6 +147,8 @@ def _run_training(
         batch_size=8,
         num_workers=num_workers,
         pin_memory=True,
+        persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
     )
 
     model_kwargs = {"nparams": 2, "lr": lr, "sample_rate": 44100}
@@ -163,6 +173,11 @@ def _run_training(
         model = LSTMModel(**model_kwargs)
 
     print(model)
+    if compile_model and gpus > 0:
+        try:
+            model = torch.compile(model, mode="reduce-overhead")
+        except Exception as e:
+            print(f"(skipping torch.compile: {e})")
     trainer.fit(model, train_dataloader, val_dataloader)
 
 
@@ -184,11 +199,12 @@ def train(
     train_loss: Optional[str] = typer.Option(None, help="Override training loss (e.g. 'l1')."),
     train_length: int = typer.Option(65536),
     eval_length: int = typer.Option(131072),
-    num_workers: int = typer.Option(16),
+    num_workers: int = typer.Option(6),
     preload: bool = typer.Option(False),
     gpus: int = typer.Option(1, help="Number of GPUs (0 for CPU)."),
     precision: str = typer.Option("bf16-mixed", help="Trainer precision: 'bf16-mixed', '16-mixed', or '32-true'."),
     artifact_dir: str = typer.Option("./lightning_logs/bulk", help="Root directory for checkpoints and TensorBoard logs."),
+    compile_model: bool = typer.Option(True, "--compile/--no-compile", help="Wrap the model with torch.compile(mode='reduce-overhead')."),
 ):
     """Train a single TCN or LSTM model."""
     config: dict = {
@@ -227,12 +243,13 @@ def train(
         lr=lr,
         precision=precision,
         artifact_dir=artifact_dir,
+        compile_model=compile_model,
     )
 
 
 def train_all(
     root_dir: str = typer.Option("./data", help="Dataset root directory."),
-    num_workers: int = typer.Option(16),
+    num_workers: int = typer.Option(6),
     preload: bool = typer.Option(False),
     train_length: int = typer.Option(65536),
     eval_length: int = typer.Option(131072),
@@ -240,6 +257,7 @@ def train_all(
     lr: float = typer.Option(1e-3, help="Adam learning rate."),
     precision: str = typer.Option("bf16-mixed", help="Trainer precision: 'bf16-mixed', '16-mixed', or '32-true'."),
     artifact_dir: str = typer.Option("./lightning_logs/bulk", help="Root directory for checkpoints and TensorBoard logs."),
+    compile_model: bool = typer.Option(True, "--compile/--no-compile", help="Wrap the model with torch.compile(mode='reduce-overhead')."),
 ):
     """Run the full sweep of training configurations from the paper."""
     total = len(TRAIN_CONFIGS)
@@ -257,4 +275,5 @@ def train_all(
             lr=lr,
             precision=precision,
             artifact_dir=artifact_dir,
+            compile_model=compile_model,
         )

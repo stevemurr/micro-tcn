@@ -1,51 +1,56 @@
 import os
 import sys
 import glob
+from functools import lru_cache
+
 import torch
 import numpy as np
 from torchcodec.decoders import AudioDecoder
 
 
-def _load_int16(path: str, start: int = 0, length: int | None = None):
-    """Decode a WAV file via torchcodec and return a float32 tensor of shape (C, N).
+@lru_cache(maxsize=64)
+def _decode_full_file(path: str):
+    """Decode a WAV once and cache the full-file tensor.
 
-    Matches the legacy ``torchaudio.load(..., normalize=False)`` *magnitude*
-    (values in ``[-32768, 32767]``) so downstream training code that relies on
-    BatchNorm/FiLM normalising the input sees the same scale as before. The
-    dtype is float32 rather than int16 because Conv1d requires a floating
-    input; the dataset's ``half`` flag downcasts to float16 when requested.
+    Keeps the legacy ``torchaudio.load(..., normalize=False)`` magnitude
+    (values in ``[-32768, 32767]``) as float32 so consumers can slice cheaply.
+    The cache is per-process, so each DataLoader worker maintains its own; 64
+    files of mono 44.1 kHz audio is ~3-6 GB per worker depending on length.
     """
     dec = AudioDecoder(path)
     sr = dec.metadata.sample_rate
-    if length is None:
-        samples = dec.get_all_samples()
-    else:
-        start_seconds = start / sr
-        stop_seconds = (start + length) / sr
-        samples = dec.get_samples_played_in_range(
-            start_seconds=start_seconds, stop_seconds=stop_seconds
-        )
-    data = (samples.data * 32768.0).clamp(-32768, 32767)
+    samples = dec.get_all_samples()
+    data = (samples.data * 32768.0).clamp(-32768, 32767).contiguous()
     return data, sr
+
+
+def _load_int16(path: str, start: int = 0, length: int | None = None):
+    """Return a float32 view of shape (C, N) into the cached decoded file."""
+    data, sr = _decode_full_file(path)
+    if length is None:
+        return data, sr
+    return data[..., start:start + length], sr
 
 
 class SignalTrainLA2ADataset(torch.utils.data.Dataset):
     """ SignalTrain LA2A dataset. Source: [10.5281/zenodo.3824876](https://zenodo.org/record/3824876)."""
-    def __init__(self, root_dir, subset="train", length=16384, preload=False, half=True, fraction=1.0):
+    def __init__(self, root_dir, subset="train", length=16384, preload=False, dtype=torch.float32, fraction=1.0):
         """
         Args:
             root_dir (str): Path to the root directory of the SignalTrain dataset.
             subset (str, optional): Pull data either from "train", "val", "test", or "full" subsets. (Default: "train")
             length (int, optional): Number of samples in the returned examples. (Default: 40)
             preload (bool, optional): Read in all data into RAM during init. (Default: False)
-            half (bool, optional): Store the float32 audio as float16. (Default: True)
+            dtype (torch.dtype, optional): Output dtype for audio tensors. Use
+                ``torch.bfloat16`` / ``torch.float16`` to halve host→GPU
+                bandwidth under mixed-precision training. (Default: float32)
             fraction (float, optional): Fraction of the data to load from the subset. (Default: 1.0)
         """
         self.root_dir = root_dir
         self.subset = subset
         self.length = length
         self.preload = preload
-        self.half = half
+        self.dtype = dtype
         self.fraction = fraction
 
         if self.subset == "full":
@@ -90,9 +95,8 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
                 if input.shape[-1] != target.shape[-1]:
                     print(os.path.basename(ifile), input.shape[-1], os.path.basename(tfile), target.shape[-1])
                     raise RuntimeError("Found potentially corrupt file!")
-                if self.half:
-                    input = input.half()
-                    target = target.half()
+                input = input.to(self.dtype)
+                target = target.to(self.dtype)
             else:
                 input = None
                 target = None
@@ -161,14 +165,15 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
                                    start=offset, length=self.length)
             target, _ = _load_int16(self.examples[idx]["target_file"],
                                     start=offset, length=self.length)
-            if self.half:
-                input = input.half()
-                target = target.half()
+            if input.dtype != self.dtype:
+                input = input.to(self.dtype)
+                target = target.to(self.dtype)
 
-        # at random with p=0.5 flip the phase
+        # at random with p=0.5 flip the phase; out-of-place because the loader
+        # may hand back views into the LRU-cached full-file tensors.
         if np.random.rand() > 0.5:
-            input *= -1
-            target *= -1
+            input = -input
+            target = -target
 
         # then get the tuple of parameters
         params = torch.tensor(self.examples[idx]["params"]).unsqueeze(0)
