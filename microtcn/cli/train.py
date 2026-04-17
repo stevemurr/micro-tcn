@@ -12,6 +12,7 @@ from microtcn.lstm import LSTMModel
 from microtcn.tcn import TCNModel
 
 torch.backends.cudnn.benchmark = True
+torch.set_float32_matmul_precision("high")
 
 
 TRAIN_CONFIGS = [
