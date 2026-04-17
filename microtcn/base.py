@@ -97,12 +97,13 @@ class Base(pl.LightningModule):
         self.log('val_loss/L1', l1_loss)
         self.log('val_loss/STFT', stft_loss)
 
-        # move tensors to cpu for logging
+        # move tensors to cpu for logging; cast from bf16/fp16 since numpy
+        # doesn't support those dtypes
         outputs = {
-            "input" : input_crop.cpu().numpy(),
-            "target": target_crop.cpu().numpy(),
-            "pred"  : pred.cpu().numpy(),
-            "params" : params.cpu().numpy()}
+            "input" : input_crop.float().cpu().numpy(),
+            "target": target_crop.float().cpu().numpy(),
+            "pred"  : pred.float().cpu().numpy(),
+            "params" : params.float().cpu().numpy()}
 
         self.validation_step_outputs.append(outputs)
         return outputs
