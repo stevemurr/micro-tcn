@@ -62,6 +62,7 @@ def _run_training(
     gpus: int,
     lr: float,
     precision: str,
+    artifact_dir: str,
 ):
     print(f"* Training config {idx + 1}/{total}")
     print(config)
@@ -87,7 +88,7 @@ def _run_training(
     if "train_loss" in config:
         specifier += f"__loss-{config['train_loss']}"
 
-    default_root_dir = os.path.join("lightning_logs", "bulk", specifier)
+    default_root_dir = os.path.join(artifact_dir, specifier)
     print(default_root_dir)
 
     checkpoint_callback = ModelCheckpoint(
@@ -187,6 +188,7 @@ def train(
     preload: bool = typer.Option(False),
     gpus: int = typer.Option(1, help="Number of GPUs (0 for CPU)."),
     precision: str = typer.Option("bf16-mixed", help="Trainer precision: 'bf16-mixed', '16-mixed', or '32-true'."),
+    artifact_dir: str = typer.Option("./lightning_logs/bulk", help="Root directory for checkpoints and TensorBoard logs."),
 ):
     """Train a single TCN or LSTM model."""
     config: dict = {
@@ -224,6 +226,7 @@ def train(
         gpus=gpus,
         lr=lr,
         precision=precision,
+        artifact_dir=artifact_dir,
     )
 
 
@@ -236,6 +239,7 @@ def train_all(
     gpus: int = typer.Option(1, help="Number of GPUs (0 for CPU)."),
     lr: float = typer.Option(1e-3, help="Adam learning rate."),
     precision: str = typer.Option("bf16-mixed", help="Trainer precision: 'bf16-mixed', '16-mixed', or '32-true'."),
+    artifact_dir: str = typer.Option("./lightning_logs/bulk", help="Root directory for checkpoints and TensorBoard logs."),
 ):
     """Run the full sweep of training configurations from the paper."""
     total = len(TRAIN_CONFIGS)
@@ -252,4 +256,5 @@ def train_all(
             gpus=gpus,
             lr=lr,
             precision=precision,
+            artifact_dir=artifact_dir,
         )
