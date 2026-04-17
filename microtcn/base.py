@@ -134,13 +134,15 @@ class Base(pl.LightningModule):
             p = outputs["pred"][rand_idx].squeeze()
             prm = outputs["params"][rand_idx].squeeze()
 
-            # log audio examples (only tensorboard-style loggers expose add_audio)
+            # log audio examples (only tensorboard-style loggers expose
+            # add_audio). input/target live at int16 magnitude to match the
+            # legacy loader; pred comes out of tanh already in [-1, 1].
             if hasattr(self.logger.experiment, "add_audio"):
                 self.logger.experiment.add_audio(f"input/{idx}",
-                                                 i, self.global_step,
+                                                 i / 32768.0, self.global_step,
                                                  sample_rate=self.hparams.sample_rate)
                 self.logger.experiment.add_audio(f"target/{idx}",
-                                                 t, self.global_step,
+                                                 t / 32768.0, self.global_step,
                                                  sample_rate=self.hparams.sample_rate)
                 self.logger.experiment.add_audio(f"pred/{idx}",
                                                  p, self.global_step,
