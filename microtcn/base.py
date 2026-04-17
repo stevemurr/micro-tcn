@@ -33,6 +33,9 @@ class Base(pl.LightningModule):
         self.l1      = torch.nn.L1Loss()
         self.stft    = auraloss.freq.STFTLoss()
 
+        self.validation_step_outputs: list = []
+        self.test_step_outputs: list = []
+
     def forward(self, x, p):
         pass
 
@@ -102,10 +105,11 @@ class Base(pl.LightningModule):
             "pred"  : pred.cpu().numpy(),
             "params" : params.cpu().numpy()}
 
+        self.validation_step_outputs.append(outputs)
         return outputs
 
     @torch.jit.unused
-    def validation_epoch_end(self, validation_step_outputs):
+    def on_validation_epoch_end(self):
         # flatten the output validation step dicts to a single dict
         outputs = {
             "input" : [],
@@ -113,7 +117,7 @@ class Base(pl.LightningModule):
             "pred" : [],
             "params" : []}
 
-        for out in validation_step_outputs:
+        for out in self.validation_step_outputs:
             for key, val in out.items():
                 bs = val.shape[0]
                 for bidx in np.arange(bs):
@@ -161,13 +165,20 @@ class Base(pl.LightningModule):
                 AudioEncoder(torch.tensor(p).view(1,-1).float(),
                              sample_rate=self.hparams.sample_rate).to_file(pred_filename)
 
-    @torch.jit.unused
-    def test_step(self, batch, batch_idx):
-        return self.validation_step(batch, batch_idx)
+        self.validation_step_outputs.clear()
 
     @torch.jit.unused
-    def test_epoch_end(self, test_step_outputs):
-        return self.validation_epoch_end(test_step_outputs)
+    def test_step(self, batch, batch_idx):
+        outputs = self.validation_step(batch, batch_idx)
+        self.test_step_outputs.append(outputs)
+        return outputs
+
+    @torch.jit.unused
+    def on_test_epoch_end(self):
+        # validation_step appended to validation_step_outputs too; route through
+        # the same logging path and keep the test list in sync.
+        self.on_validation_epoch_end()
+        self.test_step_outputs.clear()
 
     @torch.jit.unused
     def configure_optimizers(self):
