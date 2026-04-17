@@ -63,6 +63,7 @@ def _run_training(
     precision: str,
     artifact_dir: str,
     compile_model: bool,
+    cache_dir: Optional[str] = None,
 ):
     print(f"* Training config {idx + 1}/{total}")
     print(config)
@@ -121,6 +122,7 @@ def _run_training(
         fraction=config["train_fraction"],
         dtype=data_dtype,
         length=train_length,
+        cache_dir=cache_dir,
     )
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
@@ -137,6 +139,7 @@ def _run_training(
         dtype=data_dtype,
         subset="val",
         length=eval_length,
+        cache_dir=cache_dir,
     )
     val_dataloader = torch.utils.data.DataLoader(
         val_dataset,
@@ -201,6 +204,7 @@ def train(
     precision: str = typer.Option("bf16-mixed", help="Trainer precision: 'bf16-mixed', '16-mixed', or '32-true'."),
     artifact_dir: str = typer.Option("./lightning_logs/bulk", help="Root directory for checkpoints and TensorBoard logs."),
     compile_model: bool = typer.Option(True, "--compile/--no-compile", help="Wrap the model with torch.compile(mode='reduce-overhead')."),
+    cache_dir: Optional[str] = typer.Option(None, help="Where to keep the decoded int16 mmap store. Defaults to {root_dir}/.cache — use this flag when root_dir is read-only."),
 ):
     """Train a single TCN or LSTM model."""
     config: dict = {
@@ -239,6 +243,7 @@ def train(
         precision=precision,
         artifact_dir=artifact_dir,
         compile_model=compile_model,
+        cache_dir=cache_dir,
     )
 
 
@@ -252,6 +257,7 @@ def train_all(
     precision: str = typer.Option("bf16-mixed", help="Trainer precision: 'bf16-mixed', '16-mixed', or '32-true'."),
     artifact_dir: str = typer.Option("./lightning_logs/bulk", help="Root directory for checkpoints and TensorBoard logs."),
     compile_model: bool = typer.Option(True, "--compile/--no-compile", help="Wrap the model with torch.compile(mode='reduce-overhead')."),
+    cache_dir: Optional[str] = typer.Option(None, help="Where to keep the decoded int16 mmap store. Defaults to {root_dir}/.cache — use this flag when root_dir is read-only."),
 ):
     """Run the full sweep of training configurations from the paper."""
     total = len(TRAIN_CONFIGS)
@@ -269,4 +275,5 @@ def train_all(
             precision=precision,
             artifact_dir=artifact_dir,
             compile_model=compile_model,
+            cache_dir=cache_dir,
         )

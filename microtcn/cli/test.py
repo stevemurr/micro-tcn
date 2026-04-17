@@ -29,6 +29,7 @@ def test(
     eval_length: int = typer.Option(8388608),
     batch_size: int = typer.Option(1),
     num_workers: int = typer.Option(32),
+    cache_dir: Optional[str] = typer.Option(None, help="Where to keep the decoded int16 mmap store. Defaults to {root_dir}/.cache — use this flag when root_dir is read-only."),
 ):
     """Evaluate all trained models under ``model_dir`` on the eval subset."""
     pl.seed_everything(42)
@@ -37,6 +38,7 @@ def test(
         root_dir,
         subset=eval_subset,
         length=eval_length,
+        cache_dir=cache_dir,
     )
     test_dataloader = torch.utils.data.DataLoader(
         test_dataset,
