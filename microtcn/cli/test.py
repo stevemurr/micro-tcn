@@ -9,8 +9,8 @@ import numpy as np
 import pyloudnorm as pyln
 import pytorch_lightning as pl
 import torch
-import torchaudio
 import typer
+from torchcodec.encoders import AudioEncoder
 
 from microtcn.data import SignalTrainLA2ADataset
 from microtcn.lstm import LSTMModel
@@ -138,11 +138,11 @@ def test(
                     ofile = os.path.join(save_dir, f"{params_key}-{bidx}-output--{model_id}.wav")
                     ifile = os.path.join(save_dir, f"{params_key}-{bidx}-input.wav")
                     tfile = os.path.join(save_dir, f"{params_key}-{bidx}-target.wav")
-                    torchaudio.save(ofile, o.view(1, -1).cpu().float(), sample_rate)
+                    AudioEncoder(o.view(1, -1).cpu().float(), sample_rate=sample_rate).to_file(ofile)
                     if not os.path.isfile(ifile):
-                        torchaudio.save(ifile, i.view(1, -1).cpu().float(), sample_rate)
+                        AudioEncoder(i.view(1, -1).cpu().float(), sample_rate=sample_rate).to_file(ifile)
                     if not os.path.isfile(tfile):
-                        torchaudio.save(tfile, t.view(1, -1).cpu().float(), sample_rate)
+                        AudioEncoder(t.view(1, -1).cpu().float(), sample_rate=sample_rate).to_file(tfile)
 
                 entry = results.setdefault(
                     params_key,

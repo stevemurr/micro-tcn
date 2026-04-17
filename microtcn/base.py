@@ -1,10 +1,10 @@
 import os
 import torch
-import torchaudio
 import numpy as np
 import torchsummary
 import pytorch_lightning as pl
 from argparse import ArgumentParser
+from torchcodec.encoders import AudioEncoder
 
 import auraloss
 from microtcn.utils import center_crop, causal_crop
@@ -149,19 +149,17 @@ class Base(pl.LightningModule):
                 target_filename = os.path.join(self.hparams.save_dir, f"{idx}-target-{int(prm[0]):1d}-{prm[1]:0.2f}.wav")
 
                 if not os.path.isfile(input_filename):
-                    torchaudio.save(input_filename, 
-                                    torch.tensor(i).view(1,-1).float(),
-                                    sample_rate=self.hparams.sample_rate)
+                    AudioEncoder(torch.tensor(i).view(1,-1).float(),
+                                 sample_rate=self.hparams.sample_rate).to_file(input_filename)
 
                 if not os.path.isfile(target_filename):
-                    torchaudio.save(target_filename,
-                                    torch.tensor(t).view(1,-1).float(),
-                                    sample_rate=self.hparams.sample_rate)
+                    AudioEncoder(torch.tensor(t).view(1,-1).float(),
+                                 sample_rate=self.hparams.sample_rate).to_file(target_filename)
 
-                torchaudio.save(os.path.join(self.hparams.save_dir, 
-                                f"{idx}-pred-{self.hparams.train_loss}-{int(prm[0]):1d}-{prm[1]:0.2f}.wav"), 
-                                torch.tensor(p).view(1,-1).float(),
-                                sample_rate=self.hparams.sample_rate)
+                pred_filename = os.path.join(self.hparams.save_dir,
+                                f"{idx}-pred-{self.hparams.train_loss}-{int(prm[0]):1d}-{prm[1]:0.2f}.wav")
+                AudioEncoder(torch.tensor(p).view(1,-1).float(),
+                             sample_rate=self.hparams.sample_rate).to_file(pred_filename)
 
     @torch.jit.unused
     def test_step(self, batch, batch_idx):

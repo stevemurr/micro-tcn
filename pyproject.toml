@@ -19,11 +19,10 @@ classifiers = [
 ]
 dependencies = [
     "torch",
-    "torchaudio",
+    "torchcodec",
     "torchsummary",
     "pytorch-lightning",
     "auraloss",
-    "soundfile",
     "scipy",
     "numpy",
     "librosa",

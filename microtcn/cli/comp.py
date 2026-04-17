@@ -6,8 +6,9 @@ import time
 from typing import Optional
 
 import torch
-import torchaudio
 import typer
+from torchcodec.decoders import AudioDecoder
+from torchcodec.encoders import AudioEncoder
 
 from microtcn.lstm import LSTMModel
 from microtcn.tcn import TCNModel
@@ -41,8 +42,9 @@ def _get_files(input_path: str) -> list:
 
 
 def _process(model, inputfile: str, limit: float, peak_red: float, gpu: bool, verbose: bool):
-    input_, sr = torchaudio.load(inputfile, normalize=False)
-    input_ = input_.float() / 32768
+    dec = AudioDecoder(inputfile)
+    sr = dec.metadata.sample_rate
+    input_ = dec.get_all_samples().data
 
     if input_.size(0) > 1:
         print(f"Warning: model is mono; downmixing {input_.size(0)} channels.")
@@ -75,7 +77,7 @@ def _process(model, inputfile: str, limit: float, peak_red: float, gpu: bool, ve
     srcbasename = os.path.basename(inputfile).split(".")[0]
     outfile = os.path.join(srcpath, srcbasename)
     outfile += f"-{limit:1.0f}-{int(peak_red * 100)}-tcn-300-c.wav"
-    torchaudio.save(outfile, out.cpu(), 44100)
+    AudioEncoder(out.cpu(), sample_rate=44100).to_file(outfile)
 
 
 def comp(
