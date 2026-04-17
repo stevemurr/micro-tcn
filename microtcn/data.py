@@ -53,8 +53,8 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
             if ifile_id != tfile_id:
                 raise RuntimeError(f"Found non-matching file ids: {ifile_id} != {tfile_id}! Check dataset.")
 
-            md = torchaudio.info(tfile)
-            num_frames = md.num_frames
+            md = sf.info(tfile)
+            num_frames = md.frames
 
             if self.preload:
                 sys.stdout.write(f"* Pre-loading... {idx+1:3d}/{len(self.target_files):3d} ...\r")
@@ -96,8 +96,8 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
             n_classes = len(classes) # number of unique compressor configurations
             fraction_examples = int(len(self.examples) * self.fraction)
             n_examples_per_class = int(fraction_examples / n_classes)
-            n_min_total = ((self.length * n_examples_per_class * n_classes) / md.sample_rate) / 60 
-            n_min_per_class = ((self.length * n_examples_per_class) / md.sample_rate) / 60 
+            n_min_total = ((self.length * n_examples_per_class * n_classes) / md.samplerate) / 60 
+            n_min_per_class = ((self.length * n_examples_per_class) / md.samplerate) / 60 
             print(sorted(classes))
             print(f"Total Examples: {len(self.examples)}     Total classes: {n_classes}")
             print(f"Fraction examples: {fraction_examples}    Examples/class: {n_examples_per_class}")
@@ -117,7 +117,7 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
 
             self.examples = sampled_examples
 
-        self.minutes = ((self.length * len(self.examples)) / md.sample_rate) / 60 
+        self.minutes = ((self.length * len(self.examples)) / md.samplerate) / 60 
 
         # we then want to get the input files
         print(f"Located {len(self.examples)} examples totaling {self.minutes:0.2f} min in the {self.subset} subset.")
