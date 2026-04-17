@@ -140,7 +140,7 @@ def _run_training(
         pin_memory=True,
     )
 
-    model_kwargs = {"nparams": 2, "lr": lr}
+    model_kwargs = {"nparams": 2, "lr": lr, "sample_rate": 44100}
     if "train_loss" in config:
         model_kwargs["train_loss"] = config["train_loss"]
 
