@@ -22,7 +22,6 @@ def test(
     root_dir: str = typer.Option("./data"),
     model_dir: str = typer.Option("./lightning_logs/bulk"),
     save_dir: Optional[str] = typer.Option(None, help="If set, render output/input/target wavs here."),
-    preload: bool = typer.Option(False),
     half: bool = typer.Option(False),
     fast: bool = typer.Option(False, help="Skip LSTM models."),
     sample_rate: int = typer.Option(44100),
@@ -37,7 +36,6 @@ def test(
     test_dataset = SignalTrainLA2ADataset(
         root_dir,
         subset=eval_subset,
-        preload=preload,
         length=eval_length,
     )
     test_dataloader = torch.utils.data.DataLoader(

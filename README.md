@@ -73,7 +73,6 @@ If you would like to do this on GPU, perform the following command.
 uv run microtcn test \
     --root-dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
     --half \
-    --preload \
     --eval-subset test \
     --save-dir test_audio
 ```
@@ -88,7 +87,6 @@ To re-train all the models in the paper as a sweep:
 ```
 uv run microtcn train-all \
     --root-dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
-    --preload \
     --gpus 1
 ```
 

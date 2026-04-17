@@ -56,7 +56,6 @@ def _run_training(
     total: int,
     root_dir: str,
     num_workers: int,
-    preload: bool,
     train_length: int,
     eval_length: int,
     gpus: int,
@@ -121,7 +120,6 @@ def _run_training(
         subset="train",
         fraction=config["train_fraction"],
         dtype=data_dtype,
-        preload=preload,
         length=train_length,
     )
     train_dataloader = torch.utils.data.DataLoader(
@@ -136,7 +134,6 @@ def _run_training(
 
     val_dataset = SignalTrainLA2ADataset(
         root_dir,
-        preload=preload,
         dtype=data_dtype,
         subset="val",
         length=eval_length,
@@ -200,7 +197,6 @@ def train(
     train_length: int = typer.Option(65536),
     eval_length: int = typer.Option(131072),
     num_workers: int = typer.Option(6),
-    preload: bool = typer.Option(False),
     gpus: int = typer.Option(1, help="Number of GPUs (0 for CPU)."),
     precision: str = typer.Option("bf16-mixed", help="Trainer precision: 'bf16-mixed', '16-mixed', or '32-true'."),
     artifact_dir: str = typer.Option("./lightning_logs/bulk", help="Root directory for checkpoints and TensorBoard logs."),
@@ -236,7 +232,6 @@ def train(
         total=1,
         root_dir=root_dir,
         num_workers=num_workers,
-        preload=preload,
         train_length=train_length,
         eval_length=eval_length,
         gpus=gpus,
@@ -250,7 +245,6 @@ def train(
 def train_all(
     root_dir: str = typer.Option("./data", help="Dataset root directory."),
     num_workers: int = typer.Option(6),
-    preload: bool = typer.Option(False),
     train_length: int = typer.Option(65536),
     eval_length: int = typer.Option(131072),
     gpus: int = typer.Option(1, help="Number of GPUs (0 for CPU)."),
@@ -268,7 +262,6 @@ def train_all(
             total=total,
             root_dir=root_dir,
             num_workers=num_workers,
-            preload=preload,
             train_length=train_length,
             eval_length=eval_length,
             gpus=gpus,
