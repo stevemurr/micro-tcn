@@ -7,11 +7,13 @@ from torchcodec.decoders import AudioDecoder
 
 
 def _load_int16(path: str, start: int = 0, length: int | None = None):
-    """Decode a WAV file via torchcodec and return an int16 tensor of shape (C, N).
+    """Decode a WAV file via torchcodec and return a float32 tensor of shape (C, N).
 
-    Matches the legacy ``torchaudio.load(..., normalize=False)`` behaviour so
-    downstream training code (which scales via BatchNorm/FiLM) sees the same
-    magnitudes as before.
+    Matches the legacy ``torchaudio.load(..., normalize=False)`` *magnitude*
+    (values in ``[-32768, 32767]``) so downstream training code that relies on
+    BatchNorm/FiLM normalising the input sees the same scale as before. The
+    dtype is float32 rather than int16 because Conv1d requires a floating
+    input; the dataset's ``half`` flag downcasts to float16 when requested.
     """
     dec = AudioDecoder(path)
     sr = dec.metadata.sample_rate
@@ -23,7 +25,7 @@ def _load_int16(path: str, start: int = 0, length: int | None = None):
         samples = dec.get_samples_played_in_range(
             start_seconds=start_seconds, stop_seconds=stop_seconds
         )
-    data = (samples.data * 32768.0).clamp(-32768, 32767).to(torch.int16)
+    data = (samples.data * 32768.0).clamp(-32768, 32767)
     return data, sr
 
 
