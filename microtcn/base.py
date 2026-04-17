@@ -1,7 +1,6 @@
 import os
 import torch
 import numpy as np
-import torchsummary
 import pytorch_lightning as pl
 from argparse import ArgumentParser
 from torchcodec.encoders import AudioEncoder

@@ -3,7 +3,6 @@ from typing import Optional
 
 import pytorch_lightning as pl
 import torch
-import torchsummary
 import typer
 from pytorch_lightning.callbacks import ModelCheckpoint
 
@@ -160,10 +159,7 @@ def _run_training(
         )
         model = LSTMModel(**model_kwargs)
 
-    try:
-        torchsummary.summary(model, [(1, 65536), (1, 2)], device="cpu")
-    except RuntimeError as e:
-        print(f"(skipping torchsummary: {e})")
+    print(model)
     trainer.fit(model, train_dataloader, val_dataloader)
 
 
