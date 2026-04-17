@@ -159,7 +159,10 @@ def _run_training(
         )
         model = LSTMModel(**model_kwargs)
 
-    torchsummary.summary(model, [(1, 65536), (1, 2)], device="cpu")
+    try:
+        torchsummary.summary(model, [(1, 65536), (1, 2)], device="cpu")
+    except RuntimeError as e:
+        print(f"(skipping torchsummary: {e})")
     trainer.fit(model, train_dataloader, val_dataloader)
 
 
