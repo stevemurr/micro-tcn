@@ -5,6 +5,7 @@ import pytorch_lightning as pl
 import torch
 import typer
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
 
 from microtcn.data import SignalTrainLA2ADataset
 from microtcn.lstm import LSTMModel
@@ -105,6 +106,7 @@ def _run_training(
         accelerator="gpu" if gpus > 0 else "cpu",
         devices=gpus if gpus > 0 else 1,
         callbacks=[checkpoint_callback],
+        logger=TensorBoardLogger(save_dir=default_root_dir, name="lightning_logs"),
     )
 
     train_dataset = SignalTrainLA2ADataset(
