@@ -164,7 +164,6 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
         subset="train",
         length=16384,
         dtype=torch.float32,
-        fraction=1.0,
         cache_dir=None,
     ):
         """
@@ -174,7 +173,6 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
             length (int): Samples per returned example. (Default: 16384)
             dtype (torch.dtype): Output dtype. Returned tensors are in [-1, 1].
                 (Default: float32)
-            fraction (float): Fraction of the train subset to use. (Default: 1.0)
             cache_dir (str, optional): Where to keep the mmap store.
                 Defaults to ``{root_dir}/.cache``.
         """
@@ -182,7 +180,6 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
         self.subset = subset
         self.length = length
         self.dtype = dtype
-        self.fraction = fraction
         self.cache_dir = cache_dir or os.path.join(root_dir, ".cache")
 
         if subset == "full":
@@ -231,45 +228,6 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
                         "params": params,
                     }
                 )
-
-        if subset == "train":
-            classes = set(ex["params"] for ex in self.examples)
-            n_classes = len(classes)
-            fraction_examples = int(len(self.examples) * self.fraction)
-            n_examples_per_class = int(fraction_examples / n_classes)
-            total_min = (
-                (self.length * n_examples_per_class * n_classes) / self.sample_rate
-            ) / 60
-            per_class_min = (
-                (self.length * n_examples_per_class) / self.sample_rate
-            ) / 60
-
-            print(sorted(classes))
-            print(
-                f"Total Examples: {len(self.examples)}     Total classes: {n_classes}"
-            )
-            print(
-                f"Fraction examples: {fraction_examples}    Examples/class: {n_examples_per_class}"
-            )
-            print(
-                f"Training with {per_class_min:0.2f} min per class    Total of {total_min:0.2f} min"
-            )
-
-            if n_examples_per_class <= 0:
-                raise ValueError(
-                    f"Fraction `{self.fraction}` set too low. No examples selected."
-                )
-
-            sampled = []
-            extra_factor = int(1 / self.fraction)
-            for cls in classes:
-                class_examples = [ex for ex in self.examples if ex["params"] == cls]
-                indices = np.random.randint(
-                    0, high=len(class_examples), size=n_examples_per_class
-                )
-                picked = [class_examples[i] for i in indices]
-                sampled += picked * extra_factor
-            self.examples = sampled
 
         self.minutes = ((self.length * len(self.examples)) / self.sample_rate) / 60
         print(

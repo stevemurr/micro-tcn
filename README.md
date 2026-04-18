@@ -41,11 +41,12 @@ uv run microtcn train \
   --root-dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
   --artifact-dir ./runs/uTCN-300 \
   --nblocks 4 --dilation-growth 10 --kernel-size 13 --causal \
-  --train-fraction 0.1 --batch-size 16 --max-epochs 60 \
-  --lr 1e-3 --precision bf16 --num-workers 4
+  --batch-size 16 --lr 1e-3 \
+  --max-steps 20000 --warmup-steps 500 --eval-every 1000 \
+  --precision bf16 --num-workers 4
 ```
 
-First run decodes every WAV into `<root-dir>/.cache/{subset}_{input,target}.bin` (one-time, ~14 GB). Later runs mmap it directly. Per-epoch train/val losses are written to `<artifact-dir>/log.csv` and top-k + last checkpoints land in `<artifact-dir>/checkpoints/`.
+First run decodes every WAV into `<root-dir>/.cache/{subset}_{input,target}.bin` (one-time, ~14 GB). Later runs mmap it directly. Training is step-based: linear warmup over `--warmup-steps`, cosine decay to 0 by `--max-steps`. Validation runs every `--eval-every` steps; pass `--val-max-batches N` to cap val batches per eval for faster feedback. Per-eval train/val losses are written to `<artifact-dir>/log.csv`; top-k and `last.ckpt` land in `<artifact-dir>/checkpoints/`.
 
 `--precision` accepts `fp32`, `bf16`, or `fp16` (controls `torch.autocast`).
 
