@@ -6,6 +6,9 @@ license = "Apache-2.0"
 authors = ["Steven Murr"]
 description = "Real-time neural compressor modeled on LA2A — micro-TCN inference."
 
+[workspace]
+members = [".", "xtask"]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
