@@ -140,9 +140,13 @@ pub struct TcnModel {
 }
 
 impl TcnModel {
-    pub fn load_from_json(path: &Path) -> Result<Self, String> {
+    pub fn load_from_json_file(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        let parsed: ModelJson = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+        Self::load_from_json_str(&text)
+    }
+
+    pub fn load_from_json_str(text: &str) -> Result<Self, String> {
+        let parsed: ModelJson = serde_json::from_str(text).map_err(|e| e.to_string())?;
 
         if parsed.version != 1 {
             return Err(format!("unsupported export version {}", parsed.version));

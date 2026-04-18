@@ -15,6 +15,44 @@ use std::sync::Arc;
 mod model;
 use model::TcnModel;
 
+/// Directory containing the currently loaded plugin binary.
+///
+/// On Unix we find it via `dladdr` on a symbol from this crate. On Windows we
+/// currently fall back to `None` — users there can set `TCN_CLAP_MODEL`.
+fn plugin_binary_dir() -> Option<PathBuf> {
+    #[cfg(unix)]
+    unsafe {
+        use std::ffi::CStr;
+        use std::os::raw::{c_char, c_int, c_void};
+
+        #[repr(C)]
+        struct DlInfo {
+            dli_fname: *const c_char,
+            dli_fbase: *mut c_void,
+            dli_sname: *const c_char,
+            dli_saddr: *mut c_void,
+        }
+
+        extern "C" {
+            fn dladdr(addr: *const c_void, info: *mut DlInfo) -> c_int;
+        }
+
+        let mut info: DlInfo = std::mem::zeroed();
+        if dladdr(plugin_binary_dir as *const c_void, &mut info) == 0 {
+            return None;
+        }
+        if info.dli_fname.is_null() {
+            return None;
+        }
+        let path = CStr::from_ptr(info.dli_fname).to_str().ok()?;
+        PathBuf::from(path).parent().map(PathBuf::from)
+    }
+    #[cfg(not(unix))]
+    {
+        None
+    }
+}
+
 pub struct TcnClap {
     params: Arc<TcnClapParams>,
     model: Option<TcnModel>,
@@ -54,20 +92,42 @@ impl Default for TcnClap {
     }
 }
 
-fn locate_model_json() -> Option<PathBuf> {
+/// Default model, baked into the binary at compile time. Kept at
+/// `plugins/tcn-clap/assets/tcn.json`; replace and rebuild to ship a new
+/// default. Runtime overrides (env var or bundle Resources/) still win if set.
+const DEFAULT_MODEL_JSON: &str = include_str!("../assets/tcn.json");
+
+enum ModelSource {
+    Path(PathBuf),
+    Embedded(&'static str),
+}
+
+/// Resolve where to load the TCN model from, in priority order:
+/// 1. `TCN_CLAP_MODEL` env var (explicit override)
+/// 2. macOS bundle: `Contents/Resources/tcn.json`
+/// 3. Next to the plugin binary (Linux/Windows single-file `.clap`)
+/// 4. Embedded default compiled into the binary
+fn locate_model() -> ModelSource {
     if let Ok(p) = env::var("TCN_CLAP_MODEL") {
-        return Some(PathBuf::from(p));
+        return ModelSource::Path(PathBuf::from(p));
     }
-    // Fallback: look next to the plugin binary for tcn.json.
-    if let Ok(exe) = env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join("tcn.json");
-            if candidate.exists() {
-                return Some(candidate);
+
+    if let Some(binary_dir) = plugin_binary_dir() {
+        #[cfg(target_os = "macos")]
+        if let Some(contents) = binary_dir.parent() {
+            let resources = contents.join("Resources").join("tcn.json");
+            if resources.exists() {
+                return ModelSource::Path(resources);
             }
         }
+
+        let next_to_plugin = binary_dir.join("tcn.json");
+        if next_to_plugin.exists() {
+            return ModelSource::Path(next_to_plugin);
+        }
     }
-    None
+
+    ModelSource::Embedded(DEFAULT_MODEL_JSON)
 }
 
 impl Plugin for TcnClap {
@@ -101,22 +161,23 @@ impl Plugin for TcnClap {
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
 
-        match locate_model_json() {
-            Some(path) => match TcnModel::load_from_json(&path) {
-                Ok(m) => {
-                    nih_log!("loaded TCN model from {}", path.display());
-                    self.model = Some(m);
-                    true
-                }
-                Err(e) => {
-                    nih_log!("failed to load {}: {}", path.display(), e);
-                    false
-                }
-            },
-            None => {
-                nih_log!(
-                    "no TCN model found. Set TCN_CLAP_MODEL or place tcn.json next to the plugin."
-                );
+        let result = match locate_model() {
+            ModelSource::Path(path) => {
+                TcnModel::load_from_json_file(&path).map(|m| (m, format!("file {}", path.display())))
+            }
+            ModelSource::Embedded(text) => {
+                TcnModel::load_from_json_str(text).map(|m| (m, "embedded default".to_string()))
+            }
+        };
+
+        match result {
+            Ok((m, source)) => {
+                nih_log!("loaded TCN model from {}", source);
+                self.model = Some(m);
+                true
+            }
+            Err(e) => {
+                nih_log!("failed to load TCN model: {}", e);
                 false
             }
         }

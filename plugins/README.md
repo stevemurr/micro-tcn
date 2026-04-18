@@ -43,13 +43,39 @@ cd plugins/tcn-clap
 cargo xtask bundle tcn_clap --release
 ```
 
-Output lands in `target/bundled/`. The CLAP file is `tcn_clap.clap`;
-copy it to your CLAP path (e.g. `~/.clap/` on Linux, `~/Library/Audio/Plug-Ins/CLAP/` on macOS).
+Output lands in `target/bundled/` — `tcn_clap.clap` and `tcn_clap.vst3`.
 
-### Shipping a specific model
+### macOS — one-command build + install
 
-At runtime the plugin looks for `tcn.json` next to the plugin binary (or via the
-`TCN_CLAP_MODEL` env var). Replace that file to swap the model without rebuilding.
+```
+cd plugins/tcn-clap
+./install-macos.sh                     # uses the baked-in default model
+./install-macos.sh /path/to/tcn.json   # override with a different checkpoint
+```
+
+Builds via `cargo xtask bundle`, copies into `~/Library/Audio/Plug-Ins/{CLAP,VST3}/`,
+and re-codesigns (ad-hoc) — the codesign step is required after any bundle content
+change or macOS will silently refuse to load the plugin.
+
+### Model resolution (at plugin init)
+
+In priority order:
+
+1. `TCN_CLAP_MODEL` env var — explicit path override
+2. macOS: `Contents/Resources/tcn.json` inside the bundle (standard Apple convention, sealed by codesign)
+3. Linux/Windows: `tcn.json` next to the plugin file
+4. Baked-in default at `plugins/tcn-clap/assets/tcn.json`, embedded at compile time via `include_str!()`
+
+The baked-in default means a freshly built plugin works out of the box with
+no separate file to copy. Replace `assets/tcn.json` and rebuild to change the
+default, or use the env var / Resources override to ship alternate models.
+
+### Weight checkin
+
+`assets/tcn.json` is checked into the repo (~1.1 MB JSON). This keeps the
+plugin self-contained and means any build produces a working binary. If the
+file grows (bigger models) or we accumulate many checkpoints, moving to git-lfs
+or a binary export format would be the next step.
 
 ### Status
 
