@@ -5,6 +5,7 @@ import typer
 
 from microtcn.comp import compress
 from microtcn.eval import evaluate
+from microtcn.export import export_direct
 from microtcn.train import run_training
 
 app = typer.Typer(
@@ -71,6 +72,15 @@ def eval_cmd(
         eval_length=eval_length, batch_size=batch_size, num_workers=num_workers,
         max_batches=max_batches, save_json=save_json,
     )
+
+
+@app.command("export")
+def export_cmd(
+    checkpoint: str = typer.Option(..., help="Path to a direct-arch .ckpt."),
+    output: str = typer.Option(..., help="Output JSON path."),
+):
+    """Export a direct-arch checkpoint to JSON weights for the CLAP plugin."""
+    export_direct(checkpoint_path=checkpoint, output_path=output)
 
 
 @app.command("comp")

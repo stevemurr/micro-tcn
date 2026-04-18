@@ -137,3 +137,7 @@ audio/
 plots/
 demo/
 .DS_Store
+
+# Rust
+plugins/**/target/
+plugins/**/Cargo.lock
