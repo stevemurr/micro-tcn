@@ -118,6 +118,12 @@ struct TcnBlock {
     ring: Vec<Vec<f32>>, // [in_channels][ring_len]
     ring_len: usize,
     ring_pos: usize,
+
+    // Input from the PREVIOUS sample, used for the residual add. This mirrors
+    // PyTorch's `causal_crop(x_res, L)` which drops x_res[-1], so the block's
+    // conv output at time t is added to res(input_{t-1}). Without this, streaming
+    // output drifts from PyTorch by ~1 sample's worth of residual per block.
+    prev_input: Vec<f32>,
 }
 
 pub struct TcnModel {
@@ -186,6 +192,7 @@ impl TcnModel {
                     ring: vec![vec![0.0; ring_len]; b.conv1.in_channels],
                     ring_len,
                     ring_pos: 0,
+                    prev_input: vec![0.0; b.conv1.in_channels],
                 }
             })
             .collect();
@@ -212,6 +219,7 @@ impl TcnModel {
                 ch.fill(0.0);
             }
             block.ring_pos = 0;
+            block.prev_input.fill(0.0);
         }
         self.scratch_a.fill(0.0);
         self.scratch_b.fill(0.0);
@@ -320,23 +328,29 @@ impl TcnModel {
                 }
             }
 
-            // Residual 1×1 conv applied to the block input (scratch_a[0..x_len]).
-            // groups=1: regular 1×1, (out=C, in=x_len, kernel=1)
+            // Residual 1×1 conv applied to the PREVIOUS sample's input
+            // (block.prev_input), matching PyTorch's causal_crop off-by-one.
+            // groups=1: regular 1×1, (out=C, in=in_channels, kernel=1)
             // groups=in_channels: depthwise, one weight per output channel.
             if block.res_groups == 1 {
                 for o in 0..channel_width {
                     let w_o = &block.res_weight[o];
                     let mut acc = 0.0_f32;
-                    for i in 0..x_len {
-                        acc += w_o[i][0] * scratch_a[i];
+                    for i in 0..block.prev_input.len() {
+                        acc += w_o[i][0] * block.prev_input[i];
                     }
                     scratch_b[o] += acc;
                 }
             } else {
-                // in_channels == out_channels; one scalar weight per channel.
                 for o in 0..channel_width {
-                    scratch_b[o] += block.res_weight[o][0][0] * scratch_a[o];
+                    scratch_b[o] += block.res_weight[o][0][0] * block.prev_input[o];
                 }
+            }
+
+            // Save the current block input as prev_input for the next call.
+            // `scratch_a[0..x_len]` is still the block's input at this point.
+            for c in 0..x_len {
+                block.prev_input[c] = scratch_a[c];
             }
 
             // scratch_a becomes the block's output for the next iteration.
