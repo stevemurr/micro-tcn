@@ -1,11 +1,9 @@
-
-<div  align="center">
+<div align="center">
 
 # micro-TCN
-| [Paper](https://arxiv.org/abs/2102.06200) | [Demo](https://csteinmetz1.github.io/tcn-audio-effects/) | [Plugin](https://drive.google.com/drive/folders/1Yq0jAZ5WIXolMuEUH11OgUCzpmtA5g37?usp=sharing) |
+| [Paper](https://arxiv.org/abs/2102.06200) | [Demo](https://csteinmetz1.github.io/tcn-audio-effects/) |
 
 Efficient neural networks for real-time modeling of analog dynamic range compression.
-
 
 </div>
 
@@ -19,119 +17,63 @@ Install dependencies with [uv](https://docs.astral.sh/uv/):
 ```
 uv sync
 ```
-This creates a `.venv/` and installs everything from `pyproject.toml` / `uv.lock`. Activate with `source .venv/bin/activate`, or run commands directly via `uv run <cmd>`.
 
-## Pre-trained models
-
-You can download the pre-trained models [here](https://drive.google.com/file/d/1FkTZFn_6UFTX2ozB9G2RoONXQcuhJ0CX/view?usp=sharing). Then unzip as below.
-```
-mkdir lightning_logs
-mv models.zip lightning_logs/
-cd lightning_logs/
-unzip models.zip 
-```
-
-Use the `microtcn comp` command to process audio files.
-Below is an example of how to run the TCN-300-C pre-trained model on GPU.
-This will process all the files in the `audio/` directory with the limit mode engaged and a peak reduction of 42.
+## Layout
 
 ```
-uv run microtcn comp -i audio/ --limit 1 --peak-red 0.42 --gpu
+microtcn/
+  data.py      SignalTrain LA2A dataset (int16 mmap cache → [-1, 1] float)
+  model.py     TCN with FiLM conditioning (tanh output)
+  loss.py      L1 + STFT magnitude
+  train.py     training loop
+  eval.py      checkpoint evaluation, per-param-class metrics
+  comp.py      run a trained checkpoint over a WAV file
+  cli.py       typer entry points
+  utils.py     causal_crop, center_crop
 ```
 
-If you want to hear the output of a different model, pass ``--model-id``.
-To view the available pre-trained models (once you have downloaded them) run:
-
-```
-uv run microtcn comp --list-models
-
-Found 13 models in ./lightning_logs/bulk
-1-uTCN-300__causal__4-10-13__fraction-0.01-bs32
-10-LSTM-32__1-32__fraction-1.0-bs32
-11-uTCN-300__causal__3-60-5__fraction-1.0-bs32
-13-uTCN-300__noncausal__30-2-15__fraction-1.0-bs32
-14-uTCN-324-16__noncausal__10-2-15__fraction-1.0-bs32
-2-uTCN-100__causal__4-10-5__fraction-1.0-bs32
-3-uTCN-300__causal__4-10-13__fraction-1.0-bs32
-4-uTCN-1000__causal__5-10-5__fraction-1.0-bs32
-5-uTCN-100__noncausal__4-10-5__fraction-1.0-bs32
-6-uTCN-300__noncausal__4-10-13__fraction-1.0-bs32
-7-uTCN-1000__noncausal__5-10-5__fraction-1.0-bs32
-8-TCN-300__noncausal__10-2-15__fraction-1.0-bs32
-9-uTCN-300__causal__4-10-13__fraction-0.1-bs32
-```
-
-We also provide versions of the pre-trained models that have been converted to TorchScript for use in C++ [here]().
-
-## Evaluation
-
-You will first need to download the [SignalTrain dataset](https://zenodo.org/record/3824876) (~20GB) as well as the pre-trained models above.
-With this, you can then run the same evaluation pipeline used for reporting the metrics in the paper. 
-If you would like to do this on GPU, perform the following command. 
-
-```
-uv run microtcn test \
-    --root-dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
-    --half \
-    --eval-subset test \
-    --save-dir test_audio
-```
-
-Metrics will be printed to the terminal and processed audio from the test set will be written to `test_audio/`.
-Swap `--eval-subset` for `train`, `val`, or `full` to run the tests across a different split.
+Checkpoints are plain `torch.save` dicts: `{"model": state_dict, "config": {...}, "epoch": N, "val_loss": f}`.
 
 ## Training
 
-To re-train all the models in the paper as a sweep:
-
 ```
-uv run microtcn train-all \
-    --root-dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
-    --gpus 1
-```
-
-To train a single architecture, use `microtcn train` with the desired flags (see `microtcn train --help`).
-
-## Plugin
-
-We provide plugin builds (AV/VST3) for [macOS](https://drive.google.com/drive/folders/1Yq0jAZ5WIXolMuEUH11OgUCzpmtA5g37?usp=sharing). 
-You can also build the plugin for your platform.
-This will require the traced models, which you can download [here](https://drive.google.com/file/d/1FkkVl_EyU9Ztxi--AFVXJyd2uWYx3nqm/view?usp=sharing).
-First, you will need download and extract libtorch. 
-Check the [PyTorch site](https://pytorch.org/get-started/locally/) to find the correct version. 
-
-```
-wget https://download.pytorch.org/libtorch/cpu/libtorch-macos-1.7.1.zip
-unzip libtorch-macos-1.7.1.zip
+uv run microtcn train \
+  --root-dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
+  --artifact-dir ./runs/uTCN-300 \
+  --nblocks 4 --dilation-growth 10 --kernel-size 13 --causal \
+  --train-fraction 0.1 --batch-size 16 --max-epochs 60 \
+  --lr 1e-3 --precision bf16 --num-workers 4
 ```
 
-Now move this into the `realtime/` directory .
+First run decodes every WAV into `<root-dir>/.cache/{subset}_{input,target}.bin` (one-time, ~14 GB). Later runs mmap it directly. Per-epoch train/val losses are written to `<artifact-dir>/log.csv` and top-k + last checkpoints land in `<artifact-dir>/checkpoints/`.
+
+`--precision` accepts `fp32`, `bf16`, or `fp16` (controls `torch.autocast`).
+
+## Evaluation
+
 ```
-mv libtorch realtime/
+uv run microtcn eval \
+  --root-dir /path/to/SignalTrain_LA2A_Dataset_1.1 \
+  --checkpoint ./runs/uTCN-300/checkpoints/last.ckpt \
+  --subset val
 ```
 
-We provide a `ncomp.jucer` file and a `CMakeLists.txt` that was created using [FRUT](https://github.com/McMartin/FRUT).
-You will likely need to compile and run FRUT on this `.jucer` file in order to create a valid `CMakeLists.txt`.
-To do so, follow the instructions on compiling [FRUT](https://github.com/McMartin/FRUT).
-Then convert the `.jucer` file. You will have to update the paths here to reflect the location of FRUT.
+Prints per-param-class L1, STFT, and aggregate losses.
+
+## Processing a file
+
 ```
-cd realtime/plugin/
-../../FRUT/prefix/FRUT/bin/Jucer2CMake reprojucer ncomp.jucer ../../FRUT/prefix/FRUT/cmake/Reprojucer.cmake
+uv run microtcn comp \
+  --checkpoint ./runs/uTCN-300/checkpoints/last.ckpt \
+  --input audio/clip.wav \
+  --limit 0 --peak-red 0.5
 ```
 
-Now you can finally build the plugin using CMake with the `build.sh` script. 
-BUT, you will have to first update the path to libtorch in the `build.sh` script.
-```
-rm -rf build
-mkdir build
-cd build
-cmake .. -G Xcode -DCMAKE_PREFIX_PATH=/absolute/path/to/libtorch ..
-cmake --build .
-```
+Writes the processed WAV next to the input.
 
 ## Citation
-If you use any of this code in your work, please consider citing us. 
-```    
+
+```
 @inproceedings{steinmetz2022efficient,
     title={Efficient neural networks for real-time modeling of analog dynamic range compression},
     author={Steinmetz, Christian J. and Reiss, Joshua D.},

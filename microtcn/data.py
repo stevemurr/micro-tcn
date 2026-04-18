@@ -172,8 +172,8 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
             root_dir (str): SignalTrain dataset root.
             subset (str): "train" | "val" | "test" | "full". (Default: "train")
             length (int): Samples per returned example. (Default: 16384)
-            dtype (torch.dtype): Output dtype. int16-magnitude values (in
-                ``[-32768, 32767]``) are cast to this dtype on slice. (Default: float32)
+            dtype (torch.dtype): Output dtype. Returned tensors are in [-1, 1].
+                (Default: float32)
             fraction (float): Fraction of the train subset to use. (Default: 1.0)
             cache_dir (str, optional): Where to keep the mmap store.
                 Defaults to ``{root_dir}/.cache``.
@@ -289,8 +289,9 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
         input_np = np.array(self.input_store[start:end])
         target_np = np.array(self.target_store[start:end])
 
-        input_t = torch.from_numpy(input_np).to(self.dtype).unsqueeze(0)
-        target_t = torch.from_numpy(target_np).to(self.dtype).unsqueeze(0)
+        # int16 → float in [-1, 1], matching the model's tanh output range
+        input_t = (torch.from_numpy(input_np).to(self.dtype) / 32768.0).unsqueeze(0)
+        target_t = (torch.from_numpy(target_np).to(self.dtype) / 32768.0).unsqueeze(0)
 
         if np.random.rand() > 0.5:
             input_t = -input_t

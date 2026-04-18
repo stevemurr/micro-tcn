@@ -20,20 +20,10 @@ classifiers = [
 dependencies = [
     "torch",
     "torchcodec",
-    "pytorch-lightning",
     "auraloss",
-    "scipy",
     "numpy",
-    "librosa",
-    "matplotlib",
-    "pandas",
-    "pyloudnorm",
-    "thop",
     "typer>=0.12",
 ]
-
-[project.optional-dependencies]
-test = ["resampy"]
 
 [project.scripts]
 microtcn = "microtcn.cli:app"
