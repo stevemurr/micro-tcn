@@ -56,11 +56,22 @@ At runtime the plugin looks for `tcn.json` next to the plugin binary (or via the
 - [x] nih-plug scaffold, CLAP + VST3 output
 - [x] Parameters: `peak_reduction` (0..1), `limit` (0 = compress / 1 = limit)
 - [x] JSON model loader
-- [ ] Dilated Conv1D forward pass (stub — currently passthrough)
-- [ ] FiLM conditioning update on param change (stub)
-- [ ] Output tanh + residuals
-- [ ] Latency reporting / warm-up handling
+- [x] Dilated Conv1D forward pass (ring-buffer sample-by-sample)
+- [x] FiLM conditioning update on param change (fused BN + affine, recomputed on param change)
+- [x] Residual 1×1 conv (groups=1 for block 0, depthwise for blocks 1..N)
+- [x] PReLU activation, final tanh head
+- [ ] Numerical validation against PyTorch reference
+- [ ] Warm-up latency handling — first `receptive_field` samples will have cold-ring-buffer artifacts
 
-The DSP stub is in `src/model.rs` with comments marking exactly where each
-layer's arithmetic goes. The JSON schema is already parsed, so all weights are
-available — this is purely a matter of filling in the conv / BN / PReLU math.
+### Validating the port
+
+Cheapest test: after building and installing the plugin, load it on a signal
+generator track in a DAW at 44.1 kHz, compare its output against the
+`microtcn comp` CLI output for the same input file and param settings. They
+should be sample-accurate modulo float ordering.
+
+If they differ, the likely suspects are (1) the `causal_crop` off-by-one in the
+original PyTorch reference — the plugin currently uses "aligned" residual
+(same-sample add), while PyTorch's crop adds the *previous* sample's residual.
+Impact is ~22 µs mis-alignment per block, probably inaudible, but to match
+training exactly you'd add a 1-sample delay to each block's residual.

@@ -1,14 +1,12 @@
 //! TCN inference runtime (pure Rust, allocation-free at audio rate).
 //!
 //! Loads a JSON exported by `microtcn export` and runs the model sample-by-sample.
-//! The JSON holds weights for: a 3-layer conditioning MLP, N TCN blocks
-//! (each with a dilated conv, a fused BN, an adaptor MLP, PReLU, and a residual
+//! The JSON holds weights for: a 3-layer conditioning MLP, N TCN blocks (each
+//! with a dilated conv, BN stats, adaptor MLP for FiLM, PReLU, and a residual
 //! 1×1 conv), and a final 1×1 output conv.
 //!
-//! Current status: parses the JSON, carves out ring buffers, implements the
-//! conditioning update path, and leaves `process_sample` as a passthrough. All
-//! the weights and static sizes are available — filling in the conv / BN / PReLU
-//! arithmetic is the remaining work.
+//! All per-sample work is bounds-checked slice indexing — the compiler
+//! hoists the checks for tight inner loops in `--release`. No `unsafe`.
 
 use serde::Deserialize;
 use std::path::Path;
@@ -25,12 +23,16 @@ struct ModelJson {
     output: Conv1dJson,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct ConfigJson {
+    #[allow(dead_code)]
     nblocks: usize,
+    #[allow(dead_code)]
     kernel_size: usize,
+    #[allow(dead_code)]
     dilation_growth: usize,
     channel_width: usize,
+    #[allow(dead_code)]
     causal: bool,
     #[allow(dead_code)]
     nparams: usize,
@@ -41,6 +43,7 @@ struct ConfigJson {
 
 #[derive(Deserialize)]
 struct LinearJson {
+    #[allow(dead_code)]
     in_features: usize,
     out_features: usize,
     weight: Vec<Vec<f32>>, // (out, in)
@@ -50,6 +53,7 @@ struct LinearJson {
 #[derive(Deserialize)]
 struct Conv1dJson {
     in_channels: usize,
+    #[allow(dead_code)]
     out_channels: usize,
     kernel_size: usize,
     dilation: usize,
@@ -60,6 +64,7 @@ struct Conv1dJson {
 
 #[derive(Deserialize)]
 struct Bn1dJson {
+    #[allow(dead_code)]
     num_features: usize,
     #[allow(dead_code)]
     affine: bool,
@@ -70,6 +75,7 @@ struct Bn1dJson {
 
 #[derive(Deserialize)]
 struct PreluJson {
+    #[allow(dead_code)]
     num_parameters: usize,
     weight: Vec<f32>,
 }
@@ -89,26 +95,26 @@ struct BlockJson {
 
 struct TcnBlock {
     conv1_weight: Vec<Vec<Vec<f32>>>, // (out, in, kernel)
-    conv1_dilation: usize,
+    conv1_in_channels: usize,
     conv1_kernel: usize,
+    conv1_dilation: usize,
 
     bn_mean: Vec<f32>,
-    bn_var_rsqrt: Vec<f32>, // pre-computed 1/sqrt(var + eps)
+    bn_var_rsqrt: Vec<f32>, // precomputed 1 / sqrt(var + eps)
 
-    adaptor_weight: Vec<Vec<f32>>, // (out, in)
+    adaptor_weight: Vec<Vec<f32>>, // (out=2*num_features, in=32)
     adaptor_bias: Vec<f32>,
 
-    prelu_slope: Vec<f32>,
+    prelu_slope: Vec<f32>, // per-channel
 
     res_weight: Vec<Vec<Vec<f32>>>, // (out, in/groups, kernel=1)
     res_groups: usize,
 
     // FiLM scale/shift, refreshed on each param change.
-    film_scale: Vec<f32>, // per-channel (g[c] / sqrt(var[c] + eps))
-    film_shift: Vec<f32>, // per-channel (b[c] - mean[c] * film_scale[c])
+    film_scale: Vec<f32>, // g[c] / sqrt(var[c] + eps)
+    film_shift: Vec<f32>, // b[c] - mean[c] * film_scale[c]
 
-    // Ring buffer for the dilated conv (sized for (kernel - 1) * dilation + 1 samples
-    // per input channel).
+    // Ring buffer for the dilated conv — (kernel-1)*dilation+1 samples per input channel.
     ring: Vec<Vec<f32>>, // [in_channels][ring_len]
     ring_len: usize,
     ring_pos: usize,
@@ -122,8 +128,15 @@ pub struct TcnModel {
 
     blocks: Vec<TcnBlock>,
 
-    output_weight: Vec<Vec<Vec<f32>>>, // (out, in, kernel=1)
+    output_weight: Vec<Vec<Vec<f32>>>, // (1, channel_width, 1)
     output_bias: Option<Vec<f32>>,
+
+    // Per-sample scratch — sized to max channel width; allocated once on load.
+    scratch_a: Vec<f32>,
+    scratch_b: Vec<f32>,
+    gen_scratch_in: Vec<f32>,
+    gen_scratch_out: Vec<f32>,
+    adaptor_scratch: Vec<f32>,
 }
 
 impl TcnModel {
@@ -138,6 +151,8 @@ impl TcnModel {
             return Err(format!("only arch='direct' is supported, got {}", parsed.arch));
         }
 
+        let channel_width = parsed.config.channel_width;
+
         let blocks = parsed
             .blocks
             .into_iter()
@@ -149,11 +164,12 @@ impl TcnModel {
                     .iter()
                     .map(|v| 1.0 / (v + b.bn.eps).sqrt())
                     .collect();
-                let n_channels = b.bn.num_features;
+                let num_features = b.bn.running_mean.len();
                 TcnBlock {
                     conv1_weight: b.conv1.weight,
-                    conv1_dilation: b.conv1.dilation,
+                    conv1_in_channels: b.conv1.in_channels,
                     conv1_kernel: b.conv1.kernel_size,
+                    conv1_dilation: b.conv1.dilation,
                     bn_mean: b.bn.running_mean,
                     bn_var_rsqrt,
                     adaptor_weight: b.adaptor.weight,
@@ -161,8 +177,8 @@ impl TcnModel {
                     prelu_slope: b.prelu.weight,
                     res_weight: b.res.weight,
                     res_groups: b.res.groups,
-                    film_scale: vec![1.0; n_channels],
-                    film_shift: vec![0.0; n_channels],
+                    film_scale: vec![1.0; num_features],
+                    film_shift: vec![0.0; num_features],
                     ring: vec![vec![0.0; ring_len]; b.conv1.in_channels],
                     ring_len,
                     ring_pos: 0,
@@ -170,16 +186,22 @@ impl TcnModel {
             })
             .collect();
 
+        let largest_adaptor_out = parsed.config.channel_width * 2; // adaptor outputs (g, b), each C
+
         Ok(Self {
             config: parsed.config,
             gen_layers: parsed.gen,
             blocks,
             output_weight: parsed.output.weight,
             output_bias: parsed.output.bias,
+            scratch_a: vec![0.0; channel_width],
+            scratch_b: vec![0.0; channel_width],
+            gen_scratch_in: vec![0.0; 32], // gen MLP hits at most 32-d intermediates
+            gen_scratch_out: vec![0.0; 32],
+            adaptor_scratch: vec![0.0; largest_adaptor_out],
         })
     }
 
-    /// Clears every ring buffer. Call on `Plugin::reset`.
     pub fn reset(&mut self) {
         for block in self.blocks.iter_mut() {
             for ch in block.ring.iter_mut() {
@@ -187,28 +209,52 @@ impl TcnModel {
             }
             block.ring_pos = 0;
         }
+        self.scratch_a.fill(0.0);
+        self.scratch_b.fill(0.0);
     }
 
-    /// Refresh FiLM conditioning from the two compressor params. Cheap —
-    /// runs the 3-layer gen MLP once, then the adaptor in each block, and
-    /// fuses BN + affine into per-channel scale / shift.
+    /// Refresh FiLM conditioning from the two compressor params. Cheap — runs
+    /// the 3-layer gen MLP once, then the adaptor per block, and folds BN +
+    /// affine into per-channel scale / shift.
     pub fn update_conditioning(&mut self, limit: f32, peak_reduction: f32) {
-        // Run gen MLP on [limit, peak_reduction]. Expected shape: (nparams=2) → 32.
-        let mut cond: Vec<f32> = vec![limit, peak_reduction];
-        for layer in self.gen_layers.iter() {
-            cond = linear_relu(&cond, &layer.weight, layer.bias.as_deref());
-        }
-        debug_assert_eq!(cond.len(), 32, "gen MLP should produce a 32-d conditioning vector");
+        // gen MLP: 2 → 16 → 32 → 32, ReLU between layers.
+        let mut cur_in = &mut self.gen_scratch_in;
+        let mut cur_out = &mut self.gen_scratch_out;
+        cur_in[0] = limit;
+        cur_in[1] = peak_reduction;
+        let mut in_len = 2;
 
-        // For each block: adaptor(cond) → (g, b) each of length num_features;
-        // fuse with BN running stats into film_scale / film_shift.
+        for layer in self.gen_layers.iter() {
+            linear_forward_into(
+                &cur_in[..in_len],
+                &layer.weight,
+                layer.bias.as_deref(),
+                &mut cur_out[..layer.out_features],
+            );
+            // ReLU
+            for v in cur_out[..layer.out_features].iter_mut() {
+                if *v < 0.0 {
+                    *v = 0.0;
+                }
+            }
+            in_len = layer.out_features;
+            std::mem::swap(&mut cur_in, &mut cur_out);
+        }
+        // After the loop, cur_in holds the 32-d conditioning vector.
+        debug_assert_eq!(in_len, 32);
+
+        // Adaptor per block: (32) → (2 * num_features). Fuse into film_scale / film_shift.
         for block in self.blocks.iter_mut() {
-            let gb = linear_forward(&cond, &block.adaptor_weight, Some(&block.adaptor_bias));
             let n = block.bn_mean.len();
-            debug_assert_eq!(gb.len(), 2 * n, "adaptor should output 2 × num_features");
+            linear_forward_into(
+                &cur_in[..in_len],
+                &block.adaptor_weight,
+                Some(&block.adaptor_bias),
+                &mut self.adaptor_scratch[..2 * n],
+            );
             for c in 0..n {
-                let g = gb[c];
-                let b = gb[c + n];
+                let g = self.adaptor_scratch[c];
+                let b = self.adaptor_scratch[c + n];
                 let s = g * block.bn_var_rsqrt[c];
                 block.film_scale[c] = s;
                 block.film_shift[c] = b - block.bn_mean[c] * s;
@@ -216,42 +262,108 @@ impl TcnModel {
         }
     }
 
-    /// Per-sample forward pass. Currently passthrough — implement the TCN
-    /// forward here sample-by-sample using the ring buffers already allocated.
-    ///
-    /// Sketch:
-    ///   x = [sample]                     // shape (1,)
-    ///   for block in blocks:
-    ///       x_in = x (before ring push)
-    ///       push x into block.ring (per input channel, at block.ring_pos)
-    ///       conv_out[o] = sum over i, k of conv1_weight[o, i, k] *
-    ///                     block.ring[i][(ring_pos - k * dilation) mod ring_len]
-    ///       x = conv_out * film_scale + film_shift       // fused BN + FiLM affine
-    ///       x = prelu(x, prelu_slope)
-    ///       res_out = apply res conv (1×1, grouped=in_channels) to x_in
-    ///       x = x + res_out                               // residual add
-    ///       advance block.ring_pos by 1 (mod ring_len)
-    ///   output = linear-project x (32 → 1), add bias
-    ///   return tanh(output)
+    /// Per-sample TCN forward pass. No heap allocations; ring buffers carry state.
     pub fn process_sample(&mut self, input: f32) -> f32 {
-        // TODO: implement the TCN forward pass. For now, passthrough so the
-        // plugin loads and the GUI / param plumbing is verifiable end-to-end.
-        let _ = (&self.config, &self.blocks, &self.output_weight, &self.output_bias);
-        input
+        let channel_width = self.config.channel_width;
+        let Self {
+            blocks,
+            scratch_a,
+            scratch_b,
+            output_weight,
+            output_bias,
+            ..
+        } = self;
+
+        // Seed block-0 input.
+        scratch_a[0] = input;
+        let mut x_len: usize = 1;
+
+        for block in blocks.iter_mut() {
+            // Push current input into the block's ring buffer.
+            for c in 0..x_len {
+                block.ring[c][block.ring_pos] = scratch_a[c];
+            }
+
+            // Dilated conv: produce channel_width output channels.
+            // weight[o][i][k]: k=0 is the OLDEST kernel tap, k=K-1 is the NEWEST.
+            for o in 0..channel_width {
+                let w_o = &block.conv1_weight[o];
+                let mut acc = 0.0_f32;
+                for i in 0..block.conv1_in_channels {
+                    let w_oi = &w_o[i];
+                    let ring_i = &block.ring[i];
+                    for k in 0..block.conv1_kernel {
+                        let lag = (block.conv1_kernel - 1 - k) * block.conv1_dilation;
+                        let idx = (block.ring_pos + block.ring_len - lag) % block.ring_len;
+                        acc += w_oi[k] * ring_i[idx];
+                    }
+                }
+                scratch_b[o] = acc;
+            }
+
+            // Advance the write head.
+            block.ring_pos = (block.ring_pos + 1) % block.ring_len;
+
+            // Fused BN + FiLM affine.
+            for c in 0..channel_width {
+                scratch_b[c] = scratch_b[c] * block.film_scale[c] + block.film_shift[c];
+            }
+
+            // PReLU.
+            for c in 0..channel_width {
+                if scratch_b[c] < 0.0 {
+                    scratch_b[c] *= block.prelu_slope[c];
+                }
+            }
+
+            // Residual 1×1 conv applied to the block input (scratch_a[0..x_len]).
+            // groups=1: regular 1×1, (out=C, in=x_len, kernel=1)
+            // groups=in_channels: depthwise, one weight per output channel.
+            if block.res_groups == 1 {
+                for o in 0..channel_width {
+                    let w_o = &block.res_weight[o];
+                    let mut acc = 0.0_f32;
+                    for i in 0..x_len {
+                        acc += w_o[i][0] * scratch_a[i];
+                    }
+                    scratch_b[o] += acc;
+                }
+            } else {
+                // in_channels == out_channels; one scalar weight per channel.
+                for o in 0..channel_width {
+                    scratch_b[o] += block.res_weight[o][0][0] * scratch_a[o];
+                }
+            }
+
+            // scratch_a becomes the block's output for the next iteration.
+            std::mem::swap(scratch_a, scratch_b);
+            x_len = channel_width;
+        }
+
+        // Final 1×1 output conv → tanh.
+        let mut y = 0.0_f32;
+        let w_out = &output_weight[0]; // (in, 1)
+        for i in 0..x_len {
+            y += w_out[i][0] * scratch_a[i];
+        }
+        if let Some(bias) = output_bias.as_deref() {
+            y += bias[0];
+        }
+        y.tanh()
     }
 
+    #[allow(dead_code)]
     pub fn receptive_field(&self) -> usize {
         self.config.receptive_field
     }
 }
 
-// ---------- Small linear-algebra primitives (no allocation in the hot path) ---
+// ---------- Helpers ----------------------------------------------------------
 
-fn linear_forward(x: &[f32], weight: &[Vec<f32>], bias: Option<&[f32]>) -> Vec<f32> {
-    // weight: (out, in). Returns (out,).
-    let out_features = weight.len();
-    let mut y = vec![0.0_f32; out_features];
-    for o in 0..out_features {
+fn linear_forward_into(x: &[f32], weight: &[Vec<f32>], bias: Option<&[f32]>, out: &mut [f32]) {
+    // weight: (out_features, in_features). out[o] = sum_i w[o][i] * x[i] (+ bias[o])
+    debug_assert_eq!(out.len(), weight.len());
+    for o in 0..out.len() {
         let w_row = &weight[o];
         let mut acc = 0.0_f32;
         for i in 0..x.len() {
@@ -260,31 +372,6 @@ fn linear_forward(x: &[f32], weight: &[Vec<f32>], bias: Option<&[f32]>) -> Vec<f
         if let Some(b) = bias {
             acc += b[o];
         }
-        y[o] = acc;
+        out[o] = acc;
     }
-    y
-}
-
-fn linear_relu(x: &[f32], weight: &[Vec<f32>], bias: Option<&[f32]>) -> Vec<f32> {
-    let mut y = linear_forward(x, weight, bias);
-    for v in y.iter_mut() {
-        if *v < 0.0 {
-            *v = 0.0;
-        }
-    }
-    y
-}
-
-#[allow(dead_code)]
-fn prelu(x: &mut [f32], slope: &[f32]) {
-    for (v, s) in x.iter_mut().zip(slope.iter()) {
-        if *v < 0.0 {
-            *v *= *s;
-        }
-    }
-}
-
-#[allow(dead_code)]
-fn tanh_scalar(x: f32) -> f32 {
-    x.tanh()
 }
