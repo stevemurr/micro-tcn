@@ -39,9 +39,15 @@ class TCNBlock(nn.Module):
 
 
 class TCN(nn.Module):
-    """Dilated causal/non-causal TCN with FiLM param conditioning and tanh output.
+    """Dilated causal/non-causal TCN with FiLM param conditioning.
 
-    Output range is [-1, 1]; train on audio normalized to the same range.
+    Two output heads:
+      arch="direct":  y = tanh(conv(features))                   — free-form prediction
+      arch="hybrid":  y = sigmoid(g) · x + α · tanh(d)           — gain-modulator + learned
+                                                                    coloration residual
+    The hybrid head encodes the compressor's physics (gain modulation) as a structural
+    prior; the scalar α is initialized to 0 so the network starts as a pure gain-modulator
+    and only reaches for additive coloration if the loss demands it.
     """
 
     def __init__(
@@ -54,14 +60,19 @@ class TCN(nn.Module):
         dilation_growth: int = 10,
         channel_width: int = 32,
         causal: bool = True,
+        arch: str = "direct",
     ):
         super().__init__()
+        if arch not in ("direct", "hybrid"):
+            raise ValueError(f"arch must be 'direct' or 'hybrid', got {arch!r}")
         self.nparams = nparams
+        self.noutputs = noutputs
         self.nblocks = nblocks
         self.kernel_size = kernel_size
         self.dilation_growth = dilation_growth
         self.channel_width = channel_width
         self.causal = causal
+        self.arch = arch
 
         self.gen = nn.Sequential(
             nn.Linear(nparams, 16), nn.ReLU(),
@@ -77,13 +88,33 @@ class TCN(nn.Module):
             self.blocks.append(TCNBlock(in_ch, out_ch, kernel_size, dilation, causal))
             in_ch = out_ch
 
-        self.output = nn.Conv1d(out_ch, noutputs, kernel_size=1)
+        final_ch = 2 * noutputs if arch == "hybrid" else noutputs
+        self.output = nn.Conv1d(out_ch, final_ch, kernel_size=1)
+
+        if arch == "hybrid":
+            # Gain channels start with large positive bias so sigmoid(~4) ≈ 0.98;
+            # delta channels start at 0. Network begins near-identity.
+            with torch.no_grad():
+                self.output.bias.zero_()
+                self.output.bias[:noutputs].fill_(4.0)
+            self.alpha = nn.Parameter(torch.zeros(1))
 
     def forward(self, x, p):
+        x_orig = x
         cond = self.gen(p)
         for block in self.blocks:
             x = block(x, cond)
-        return torch.tanh(self.output(x))
+        raw = self.output(x)
+
+        if self.arch == "direct":
+            return torch.tanh(raw)
+
+        no = self.noutputs
+        gain = torch.sigmoid(raw[:, :no, :])
+        delta = torch.tanh(raw[:, no:, :])
+        crop = causal_crop if self.causal else center_crop
+        x_aligned = crop(x_orig, gain.shape[-1])
+        return gain * x_aligned + self.alpha * delta
 
     def receptive_field(self) -> int:
         rf = self.kernel_size

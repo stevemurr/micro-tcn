@@ -67,6 +67,7 @@ def run_training(
     kernel_size: int = 13,
     channel_width: int = 32,
     causal: bool = True,
+    arch: str = "direct",
     train_length: int = 65536,
     eval_length: int = 131072,
     batch_size: int = 16,
@@ -107,9 +108,11 @@ def run_training(
     model = TCN(
         nblocks=nblocks, dilation_growth=dilation_growth,
         kernel_size=kernel_size, channel_width=channel_width, causal=causal,
+        arch=arch,
     ).to(device)
     print(model)
-    print(f"receptive field: {model.receptive_field()} samples "
+    print(f"arch: {arch}  "
+          f"receptive field: {model.receptive_field()} samples "
           f"({model.receptive_field() / train_ds.sample_rate * 1000:.1f} ms)")
     print(f"train examples: {len(train_ds)}  val examples: {len(val_ds)}")
 
@@ -122,7 +125,7 @@ def run_training(
 
     cfg = dict(
         nblocks=nblocks, dilation_growth=dilation_growth, kernel_size=kernel_size,
-        channel_width=channel_width, causal=causal, nparams=2,
+        channel_width=channel_width, causal=causal, nparams=2, arch=arch,
         sample_rate=train_ds.sample_rate,
     )
     with open(out_dir / "config.json", "w") as f:
@@ -130,7 +133,7 @@ def run_training(
 
     log_path = out_dir / "log.csv"
     with open(log_path, "w", newline="") as f:
-        csv.writer(f).writerow(["step", "train_loss", "val_loss", "val_l1", "val_stft", "lr"])
+        csv.writer(f).writerow(["step", "train_loss", "val_loss", "val_l1", "val_stft", "lr", "alpha"])
 
     crop_fn = causal_crop if causal else center_crop
     best: list[tuple[float, Path]] = []
@@ -166,13 +169,15 @@ def run_training(
             recent_losses.clear()
             current_lr = optimizer.param_groups[0]["lr"]
 
+            alpha_val = model.alpha.item() if hasattr(model, "alpha") else 0.0
+            extra = f"  α={alpha_val:.4f}" if arch == "hybrid" else ""
             print(
                 f"[step {step:06d}] train={train_loss:.4f}  "
-                f"val={val_loss:.4f} (l1={val_l1:.4f} stft={val_stft:.4f})  lr={current_lr:.2e}",
+                f"val={val_loss:.4f} (l1={val_l1:.4f} stft={val_stft:.4f})  lr={current_lr:.2e}{extra}",
                 flush=True,
             )
             with open(log_path, "a", newline="") as f:
-                csv.writer(f).writerow([step, train_loss, val_loss, val_l1, val_stft, current_lr])
+                csv.writer(f).writerow([step, train_loss, val_loss, val_l1, val_stft, current_lr, alpha_val])
 
             ckpt_path = ckpt_dir / f"step={step:06d}-val={val_loss:.4f}.ckpt"
             state = {"model": model.state_dict(), "config": cfg, "step": step, "val_loss": val_loss}

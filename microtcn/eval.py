@@ -21,6 +21,7 @@ def load_tcn(checkpoint_path: str, device: torch.device):
         kernel_size=cfg["kernel_size"],
         channel_width=cfg["channel_width"],
         causal=cfg["causal"],
+        arch=cfg.get("arch", "direct"),
     ).to(device)
     model.load_state_dict(ckpt["model"])
     model.eval()

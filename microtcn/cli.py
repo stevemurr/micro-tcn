@@ -24,6 +24,7 @@ def train_cmd(
     kernel_size: int = typer.Option(13),
     channel_width: int = typer.Option(32),
     causal: bool = typer.Option(True),
+    arch: str = typer.Option("direct", help="'direct' (tanh head) | 'hybrid' (gain + coloration)."),
     train_length: int = typer.Option(65536),
     eval_length: int = typer.Option(131072),
     batch_size: int = typer.Option(16),
@@ -43,7 +44,7 @@ def train_cmd(
     run_training(
         root_dir=root_dir, artifact_dir=artifact_dir,
         nblocks=nblocks, dilation_growth=dilation_growth, kernel_size=kernel_size,
-        channel_width=channel_width, causal=causal,
+        channel_width=channel_width, causal=causal, arch=arch,
         train_length=train_length, eval_length=eval_length,
         batch_size=batch_size, val_batch_size=val_batch_size, lr=lr,
         max_steps=max_steps, warmup_steps=warmup_steps, eval_every=eval_every,
