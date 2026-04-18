@@ -62,11 +62,14 @@ def eval_cmd(
     eval_length: int = typer.Option(131072),
     batch_size: int = typer.Option(8),
     num_workers: int = typer.Option(4),
+    max_batches: Optional[int] = typer.Option(None, help="Cap val batches (None = all)."),
+    save_json: Optional[str] = typer.Option(None, help="Dump per-class + overall metrics JSON."),
 ):
-    """Evaluate a checkpoint on a dataset subset, per-param-class."""
+    """Evaluate a checkpoint with spectral + time-domain metrics, per-param-class."""
     evaluate(
         root_dir=root_dir, checkpoint_path=checkpoint, subset=subset,
         eval_length=eval_length, batch_size=batch_size, num_workers=num_workers,
+        max_batches=max_batches, save_json=save_json,
     )
 
 

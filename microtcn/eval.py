@@ -1,4 +1,5 @@
-"""Checkpoint evaluation over a dataset subset, per-param-class."""
+"""Checkpoint evaluation over a dataset subset, with spectral + time-domain metrics."""
+import json
 from collections import defaultdict
 from pathlib import Path
 
@@ -6,9 +7,12 @@ import torch
 from torch.utils.data import DataLoader
 
 from microtcn.data import SignalTrainLA2ADataset
-from microtcn.loss import L1STFT
+from microtcn.metrics import all_metrics
 from microtcn.model import TCN
 from microtcn.utils import causal_crop, center_crop
+
+
+METRIC_KEYS = ("stft_l1", "log_stft_l1", "mrstft_l1", "rms_env_l1", "si_sdr_db", "centroid_err_hz")
 
 
 def load_tcn(checkpoint_path: str, device: torch.device):
@@ -35,38 +39,68 @@ def evaluate(
     eval_length: int = 131072,
     batch_size: int = 8,
     num_workers: int = 4,
+    max_batches: int | None = None,
+    save_json: str | None = None,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, cfg = load_tcn(checkpoint_path, device)
     crop_fn = causal_crop if cfg["causal"] else center_crop
-    loss_fn = L1STFT().to(device)
+    sample_rate = cfg.get("sample_rate", 44100)
 
     dataset = SignalTrainLA2ADataset(root_dir, subset=subset, length=eval_length)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
                         num_workers=num_workers, pin_memory=True)
 
-    per_class: dict[str, dict[str, list[float]]] = defaultdict(lambda: {"l1": [], "stft": [], "agg": []})
+    per_class: dict[str, dict[str, list[float]]] = defaultdict(
+        lambda: {k: [] for k in METRIC_KEYS}
+    )
+    overall = {k: [] for k in METRIC_KEYS}
+
     with torch.no_grad():
-        for x, target, params in loader:
+        for batch_idx, (x, target, params) in enumerate(loader):
+            if max_batches is not None and batch_idx >= max_batches:
+                break
             x = x.to(device); target = target.to(device); params = params.to(device)
             pred = model(x, params)
             target_c = crop_fn(target, pred.shape[-1])
+
             for i in range(pred.shape[0]):
-                agg, parts = loss_fn(pred[i:i+1], target_c[i:i+1])
+                p = pred[i:i+1]
+                t = target_c[i:i+1]
+                m = all_metrics(p, t, sample_rate=sample_rate)
                 key = f"{int(params[i, 0, 0].item())}-{int(params[i, 0, 1].item() * 100):03d}"
-                per_class[key]["l1"].append(parts["l1"].item())
-                per_class[key]["stft"].append(parts["stft"].item())
-                per_class[key]["agg"].append(agg.item())
+                for mk, mv in m.items():
+                    per_class[key][mk].append(mv)
+                    overall[mk].append(mv)
+
+    def _mean(xs):
+        return sum(xs) / len(xs) if xs else float("nan")
 
     print(f"checkpoint: {checkpoint_path}")
-    print(f"subset: {subset}  examples: {len(dataset)}")
-    print(f"{'class':>8}  {'L1':>8}  {'STFT':>8}  {'agg':>8}")
-    l1_all, stft_all, agg_all = [], [], []
+    print(f"arch: {cfg.get('arch', 'direct')}  subset: {subset}  examples: "
+          f"{sum(len(v['stft_l1']) for v in per_class.values())}")
+    print()
+    header = f"{'class':>8}  " + "  ".join(f"{k:>14}" for k in METRIC_KEYS)
+    print(header)
+    print("-" * len(header))
     for key in sorted(per_class):
         v = per_class[key]
-        print(f"{key:>8}  {sum(v['l1'])/len(v['l1']):8.4f}  "
-              f"{sum(v['stft'])/len(v['stft']):8.4f}  {sum(v['agg'])/len(v['agg']):8.4f}")
-        l1_all += v['l1']; stft_all += v['stft']; agg_all += v['agg']
-    print(f"{'mean':>8}  {sum(l1_all)/len(l1_all):8.4f}  "
-          f"{sum(stft_all)/len(stft_all):8.4f}  {sum(agg_all)/len(agg_all):8.4f}")
-    return per_class
+        row = f"{key:>8}  " + "  ".join(f"{_mean(v[k]):>14.4f}" for k in METRIC_KEYS)
+        print(row)
+    print("-" * len(header))
+    mean_row = f"{'mean':>8}  " + "  ".join(f"{_mean(overall[k]):>14.4f}" for k in METRIC_KEYS)
+    print(mean_row)
+
+    result = {
+        "checkpoint": checkpoint_path,
+        "arch": cfg.get("arch", "direct"),
+        "subset": subset,
+        "sample_rate": sample_rate,
+        "per_class": {k: {mk: _mean(mv) for mk, mv in v.items()} for k, v in per_class.items()},
+        "overall": {k: _mean(overall[k]) for k in METRIC_KEYS},
+    }
+    if save_json is not None:
+        with open(save_json, "w") as f:
+            json.dump(result, f, indent=2)
+        print(f"\nwrote {save_json}")
+    return result
