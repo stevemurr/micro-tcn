@@ -161,6 +161,18 @@ impl Plugin for TcnClap {
     ) -> bool {
         self.sample_rate = buffer_config.sample_rate;
 
+        // Pre-warm smoothers so the first buffer doesn't see garbage values.
+        self.params
+            .peak_reduction
+            .smoothed
+            .reset(self.params.peak_reduction.value());
+
+        // Skip the 1.1 MB JSON parse if a model is already loaded (DAW may
+        // call initialize() repeatedly on sample-rate changes or bounce).
+        if self.model.is_some() {
+            return true;
+        }
+
         let result = match locate_model() {
             ModelSource::Path(path) => {
                 TcnModel::load_from_json_file(&path).map(|m| (m, format!("file {}", path.display())))
@@ -200,9 +212,12 @@ impl Plugin for TcnClap {
             None => return ProcessStatus::Normal,
         };
 
-        // Update conditioning on param change. Cheap — only touches the adaptor
-        // MLP + per-block scale/shift vectors, never in the per-sample hot path.
-        let peak_red = self.params.peak_reduction.smoothed.next();
+        // Update conditioning once per buffer. Cheap — touches the adaptor MLP
+        // + per-block scale/shift vectors, never the per-sample hot path. Using
+        // .value() (not .smoothed.next()) because next() advances by one sample
+        // per call and we call it once per buffer — would take forever to
+        // actually reach the target under automation.
+        let peak_red = self.params.peak_reduction.value();
         let limit = if self.params.limit.value() { 1.0_f32 } else { 0.0_f32 };
         model.update_conditioning(limit, peak_red);
 
