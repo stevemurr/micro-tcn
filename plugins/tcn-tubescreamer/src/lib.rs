@@ -79,6 +79,9 @@ impl Plugin for TcnTubeScreamer {
         self.sample_rate = buffer_config.sample_rate;
 
         if self.model.is_some() {
+            if let Some(m) = self.model.as_mut() {
+                m.allocate_block_buffers(buffer_config.max_buffer_size as usize);
+            }
             return true;
         }
 
@@ -100,6 +103,9 @@ impl Plugin for TcnTubeScreamer {
 
         nih_log!("loaded TCN model from {}", source);
         self.model = Some(model);
+        if let Some(m) = self.model.as_mut() {
+            m.allocate_block_buffers(buffer_config.max_buffer_size as usize);
+        }
         true
     }
 
@@ -124,10 +130,8 @@ impl Plugin for TcnTubeScreamer {
         // is purely bias-driven. Still cheap to recompute once per buffer.
         model.update_conditioning(&self.cond_scratch);
 
-        for channel_samples in buffer.iter_samples() {
-            for sample in channel_samples {
-                *sample = model.process_sample(*sample);
-            }
+        for ch in buffer.as_slice() {
+            model.process_block_inplace(ch);
         }
 
         ProcessStatus::Normal

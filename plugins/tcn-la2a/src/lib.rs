@@ -144,7 +144,11 @@ impl Plugin for TcnLa2a {
 
         // Skip the 1.1 MB JSON parse if a model is already loaded (DAW may
         // call initialize() repeatedly on sample-rate changes or bounce).
+        // Always re-allocate block buffers in case max_buffer_size changed.
         if self.model.is_some() {
+            if let Some(m) = self.model.as_mut() {
+                m.allocate_block_buffers(buffer_config.max_buffer_size as usize);
+            }
             return true;
         }
 
@@ -166,6 +170,9 @@ impl Plugin for TcnLa2a {
 
         nih_log!("loaded TCN model from {}", source);
         self.model = Some(model);
+        if let Some(m) = self.model.as_mut() {
+            m.allocate_block_buffers(buffer_config.max_buffer_size as usize);
+        }
         true
     }
 
@@ -201,12 +208,14 @@ impl Plugin for TcnLa2a {
         let mut in_peak = 0.0f32;
         let mut raw_out_peak = 0.0f32;
 
-        for channel_samples in buffer.iter_samples() {
-            for sample in channel_samples {
-                in_peak = in_peak.max(sample.abs());
-                *sample = model.process_sample(*sample);
-                raw_out_peak = raw_out_peak.max(sample.abs());
-                *sample *= makeup_gain;
+        // Process each channel as a full block — one SGEMM call per buffer
+        // instead of N individual SGEMM calls (N = buffer size).
+        for ch in buffer.as_slice() {
+            in_peak = in_peak.max(ch.iter().copied().fold(0.0f32, |m, s| m.max(s.abs())));
+            model.process_block_inplace(ch);
+            raw_out_peak = raw_out_peak.max(ch.iter().copied().fold(0.0f32, |m, s| m.max(s.abs())));
+            if makeup_gain > 1.0001 {
+                for s in ch.iter_mut() { *s *= makeup_gain; }
             }
         }
 
