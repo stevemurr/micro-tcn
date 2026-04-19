@@ -1,0 +1,14 @@
+[package]
+name = "tcn-plugin-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Shared TCN inference runtime + model-loading plumbing for nih-plug wrappers."
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

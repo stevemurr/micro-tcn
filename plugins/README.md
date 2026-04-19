@@ -1,5 +1,22 @@
 # micro-TCN plugins
 
+## Workspace layout
+
+```
+plugins/
+├── Cargo.toml               # workspace root
+├── install-macos.sh         # build + install every plugin (or a subset)
+├── tcn-plugin-core/         # shared: TcnModel runtime + model-path resolver
+├── tcn-la2a/                # wrapper — LA2A compressor (2 knobs)
+├── tcn-tubescreamer/        # wrapper — tube-screamer distortion (0 knobs)
+└── xtask/                   # `cargo xtask bundle <crate>`
+```
+
+The inference runtime (pure Rust, allocation-free at audio rate) lives in
+`tcn-plugin-core`. Each per-model wrapper only contributes a
+`#[derive(Params)]` struct, its CLAP/VST3 identity, and the mapping from its
+declared knobs to the flat `&[f32]` the model's FiLM conditioning expects.
+
 ## Export a checkpoint
 
 From the repo root:
@@ -10,94 +27,106 @@ uv run microtcn export \
   --output /path/to/tcn.json
 ```
 
-Only `--arch direct` checkpoints are currently exportable. The output is a plain
-JSON with all conv weights, BN stats, PReLU slopes, adaptor MLP, and the final
-conv — everything needed for inference.
+Only `--arch direct` checkpoints are currently exportable. The JSON includes
+`config.nparams`, which wrappers validate against at load time — a 3-knob
+model dropped into the 2-knob LA2A wrapper fails loudly instead of silently
+producing garbage conditioning.
 
-## tcn-clap (nih-plug, Rust)
+## Building
 
-A CLAP + VST3 plugin that loads an exported `tcn.json` and runs the TCN in
-real-time. Built on [nih-plug](https://github.com/robbert-vdh/nih-plug).
-
-### Architecture
-
-The plugin uses a **pure Rust** inference runtime (no RTNeural / libtorch / ONNX
-dependency). Why:
-
-- Real-time safe by construction — no heap allocations during `process()`
-- Small binary (~3 MB vs. 500 MB for libtorch)
-- Easier cross-platform builds (no C++ FFI)
-- The model is small enough (50 K params, 4 blocks) that hand-rolled Rust
-  matches RTNeural's perf without the template gymnastics
-
-The inference module (`src/model.rs`) loads the JSON once on init, lays out
-ring buffers for dilated convs, and processes audio sample-by-sample in the
-audio callback. Parameters (`peak_reduction`, `limit`) trigger a cheap update
-of the FiLM conditioning (re-runs the 3-layer MLP → caches scale/shift per
-block) on change; the per-sample hot path has no MLP forward.
-
-### Build
+From the `plugins/` workspace root:
 
 ```
-cd plugins/tcn-clap
-cargo xtask bundle tcn_clap --release
+cargo xtask bundle tcn-la2a --release
 ```
 
-Output lands in `target/bundled/` — `tcn_clap.clap` and `tcn_clap.vst3`.
+Output lands in `plugins/target/bundled/` (workspace target, not per-crate).
 
-### macOS — one-command build + install
+## Install on macOS
+
+One unified installer at the workspace root handles every plugin:
 
 ```
-cd plugins/tcn-clap
-./install-macos.sh                     # uses the baked-in default model
-./install-macos.sh /path/to/tcn.json   # override with a different checkpoint
+cd plugins
+./install-macos.sh                              # install every plugin
+./install-macos.sh tcn-la2a                     # install one
+./install-macos.sh tcn-la2a tcn-tubescreamer    # install a subset
+
+# override the bundled model per-plugin via env vars (absent = bundled default):
+TCN_LA2A_MODEL=/path/to/la2a.json \
+TCN_TUBESCREAMER_MODEL=/path/to/ts.json \
+  ./install-macos.sh
 ```
 
-Builds via `cargo xtask bundle`, copies into `~/Library/Audio/Plug-Ins/{CLAP,VST3}/`,
-and re-codesigns (ad-hoc) — the codesign step is required after any bundle content
-change or macOS will silently refuse to load the plugin.
+The script builds via `cargo xtask bundle <crate>`, copies into
+`~/Library/Audio/Plug-Ins/{CLAP,VST3}/`, and re-codesigns (ad-hoc) — the
+codesign step is required after any bundle-content change or macOS silently
+refuses to load the plugin.
 
-### Model resolution (at plugin init)
+## Model resolution (at plugin init)
 
-In priority order:
+Priority order, consulted by `tcn_plugin_core::locate_model()`:
 
-1. `TCN_CLAP_MODEL` env var — explicit path override
-2. macOS: `Contents/Resources/tcn.json` inside the bundle (standard Apple convention, sealed by codesign)
-3. Linux/Windows: `tcn.json` next to the plugin file
-4. Baked-in default at `plugins/tcn-clap/assets/tcn.json`, embedded at compile time via `include_str!()`
+1. **Per-plugin env var override** — e.g. `TCN_LA2A_MODEL=/path/to/tcn.json`.
+   Each wrapper declares its own variable so two plugins installed side by
+   side don't collide.
+2. **macOS bundle**: `Contents/Resources/tcn.json` inside the `.clap`/`.vst3`
+   (standard Apple convention, sealed by codesign).
+3. **Linux/Windows**: `tcn.json` next to the plugin binary.
+4. **Embedded default** baked in at compile time from
+   `plugins/<wrapper>/assets/tcn.json`.
 
-The baked-in default means a freshly built plugin works out of the box with
-no separate file to copy. Replace `assets/tcn.json` and rebuild to change the
-default, or use the env var / Resources override to ship alternate models.
+## Adding a new per-model wrapper
 
-### Weight checkin
+Concrete procedure (rough template — the LA2A crate is ~170 lines total):
 
-`assets/tcn.json` is checked into the repo (~1.1 MB JSON). This keeps the
-plugin self-contained and means any build produces a working binary. If the
-file grows (bigger models) or we accumulate many checkpoints, moving to git-lfs
-or a binary export format would be the next step.
+1. Export your trained checkpoint to `plugins/tcn-<name>/assets/tcn.json`.
+2. Copy `plugins/tcn-la2a/` to `plugins/tcn-<name>/`; `git mv` keeps history.
+3. In `plugins/tcn-<name>/Cargo.toml`: rename the `[package]` name.
+4. In `plugins/tcn-<name>/src/lib.rs`:
+   - Rename the plugin struct, `NPARAMS`, and the `MODEL_ENV_OVERRIDE`
+     constant (e.g. `TCN_TUBESCREAMER_MODEL`).
+   - Declare one `FloatParam`/`BoolParam` per knob the model was trained with.
+     Match names and ranges to the dataset's captured knob axes — the
+     `param_names` field in the dataset metadata is the source of truth.
+   - Update the `update_conditioning(&self.cond_scratch)` call: `cond_scratch`
+     must be `[f32; NPARAMS]`, filled in the order the model was trained with.
+   - Update CLAP_ID, CLAP_DESCRIPTION, CLAP_FEATURES (e.g.
+     `ClapFeature::Distortion` for a tube screamer), and VST3_CLASS_ID (any
+     unique 16-byte literal).
+5. Add the crate to `plugins/Cargo.toml`'s `members`, and add the crate name
+   + env-var-to-plugin mapping to `install-macos.sh` (`ALL_PLUGINS` and the
+   `env_var_for` case).
+6. `cargo xtask bundle tcn-<name> --release` to sanity-check.
 
-### Status
+If the wrapper's declared `NPARAMS` doesn't match the loaded model's
+`config.nparams`, `model.require_nparams(NPARAMS)` logs a clear error in
+`initialize()` and the plugin refuses to load — catches a lot of the
+"dropped the wrong model JSON into Resources/" failures.
+
+### Special case: nparams = 0
+
+A model trained on a fixed-setting capture (e.g. the current TubeScreamer
+dataset, recorded at a single drive position) has `nparams = 0`. The wrapper
+declares zero knobs, `cond_scratch` is `[f32; 0]`, and `update_conditioning`
+is called with an empty slice. FiLM effectively becomes a learned per-block
+bias — exactly the training-time behavior.
+
+## Status (LA2A)
 
 - [x] nih-plug scaffold, CLAP + VST3 output
 - [x] Parameters: `peak_reduction` (0..1), `limit` (0 = compress / 1 = limit)
-- [x] JSON model loader
-- [x] Dilated Conv1D forward pass (ring-buffer sample-by-sample)
-- [x] FiLM conditioning update on param change (fused BN + affine, recomputed on param change)
+- [x] JSON model loader, dilated Conv1D forward, FiLM conditioning
 - [x] Residual 1×1 conv (groups=1 for block 0, depthwise for blocks 1..N)
 - [x] PReLU activation, final tanh head
+- [x] `nparams` validation at init
 - [ ] Numerical validation against PyTorch reference
-- [ ] Warm-up latency handling — first `receptive_field` samples will have cold-ring-buffer artifacts
+- [ ] Warm-up latency handling — first `receptive_field` samples have
+      cold-ring-buffer artifacts
 
-### Validating the port
+## Weight checkin
 
-Cheapest test: after building and installing the plugin, load it on a signal
-generator track in a DAW at 44.1 kHz, compare its output against the
-`microtcn comp` CLI output for the same input file and param settings. They
-should be sample-accurate modulo float ordering.
-
-If they differ, the likely suspects are (1) the `causal_crop` off-by-one in the
-original PyTorch reference — the plugin currently uses "aligned" residual
-(same-sample add), while PyTorch's crop adds the *previous* sample's residual.
-Impact is ~22 µs mis-alignment per block, probably inaudible, but to match
-training exactly you'd add a 1-sample delay to each block's residual.
+Each wrapper's `assets/tcn.json` is checked into the repo (~1.1 MB JSON
+each). Keeps plugin crates self-contained and means any build produces a
+working binary. If this grows painful (many wrappers, bigger models), moving
+to git-lfs or a binary export format is the next step.

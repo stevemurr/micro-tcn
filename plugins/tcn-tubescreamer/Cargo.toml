@@ -1,0 +1,14 @@
+[package]
+name = "tcn-tubescreamer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Real-time neural tube-screamer distortion — micro-TCN inference."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+tcn-plugin-core = { path = "../tcn-plugin-core" }
+nih_plug = { workspace = true }

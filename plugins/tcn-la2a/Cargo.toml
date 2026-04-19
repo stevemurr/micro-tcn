@@ -1,26 +1,17 @@
 [package]
-name = "tcn_clap"
-version = "0.1.0"
-edition = "2021"
-license = "Apache-2.0"
-authors = ["Steven Murr"]
+name = "tcn-la2a"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
 description = "Real-time neural compressor modeled on LA2A — micro-TCN inference."
-
-[workspace]
-members = [".", "xtask"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+tcn-plugin-core = { path = "../tcn-plugin-core" }
 # Omit `assert_process_allocs` — in release it wraps the global allocator to
 # abort on heap allocations during `process()`, which some DAWs treat as a
 # fatal plugin fault and restart the instance in a crash loop.
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
-[profile.release]
-lto = "thin"
-strip = "symbols"
-opt-level = 3
+nih_plug = { workspace = true }

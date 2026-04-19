@@ -1,0 +1,27 @@
+[workspace]
+resolver = "2"
+members = [
+    "tcn-plugin-core",
+    "tcn-la2a",
+    "tcn-tubescreamer",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+authors = ["Steven Murr"]
+
+[workspace.dependencies]
+nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Release profile applied to every crate in the workspace. The per-crate
+# tcn-clap setting from before lived next to `[package]`; moving it up here
+# means every bundled plugin binary gets the same tuning.
+[profile.release]
+lto = "thin"
+strip = "symbols"
+opt-level = 3

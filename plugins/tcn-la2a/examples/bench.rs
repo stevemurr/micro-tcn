@@ -4,14 +4,15 @@
 //! reporting samples/sec and the real-time budget used at 44.1 kHz.
 
 use std::time::Instant;
-use tcn_clap::model::TcnModel;
+use tcn_plugin_core::TcnModel;
 
 const DEFAULT_MODEL_JSON: &str = include_str!("../assets/tcn.json");
 
 fn main() {
     let mut model = TcnModel::load_from_json_str(DEFAULT_MODEL_JSON)
         .expect("load embedded model");
-    model.update_conditioning(0.0, 0.5);
+    // LA2A conditioning: [limit (0/1), peak_reduction (0..1)].
+    model.update_conditioning(&[0.0, 0.5]);
 
     let n: usize = 200_000;
     let input: Vec<f32> = (0..n)

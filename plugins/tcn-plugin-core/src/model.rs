@@ -30,9 +30,7 @@ struct ConfigJson {
     channel_width: usize,
     #[allow(dead_code)]
     causal: bool,
-    #[allow(dead_code)]
     nparams: usize,
-    #[allow(dead_code)]
     sample_rate: u32,
     receptive_field: usize,
 }
@@ -265,6 +263,11 @@ impl TcnModel {
         let output_weight: Vec<f32> = parsed.output.weight[0].iter().map(|row| row[0]).collect();
         let output_bias = parsed.output.bias.and_then(|v| v.first().copied()).unwrap_or(0.0);
 
+        // gen scratch must hold the widest layer IO — inputs (nparams),
+        // hidden (16), hidden (32), output (32). For nparams = 0..32 the
+        // cap is 32; guard against future models with nparams > 32.
+        let gen_scratch_width = parsed.config.nparams.max(32);
+
         Ok(Self {
             config: parsed.config,
             gen,
@@ -273,10 +276,37 @@ impl TcnModel {
             output_bias,
             scratch_a: vec![0.0; channel_width],
             scratch_b: vec![0.0; channel_width],
-            gen_scratch_a: vec![0.0; 32],
-            gen_scratch_b: vec![0.0; 32],
+            gen_scratch_a: vec![0.0; gen_scratch_width],
+            gen_scratch_b: vec![0.0; gen_scratch_width],
             adaptor_scratch: vec![0.0; channel_width * 2],
         })
+    }
+
+    /// Number of conditioning parameters this model accepts.
+    /// Wrappers must pass exactly this many floats to `update_conditioning`.
+    pub fn nparams(&self) -> usize {
+        self.config.nparams
+    }
+
+    /// Assert the model's `nparams` matches what a wrapper declares.
+    ///
+    /// Call after loading so a mismatched model drop-in (e.g. a 3-knob
+    /// TubeScreamer JSON loaded by a 2-knob LA2A wrapper) fails loudly at init
+    /// instead of silently producing garbage conditioning.
+    pub fn require_nparams(&self, expected: usize) -> Result<(), String> {
+        if self.config.nparams == expected {
+            Ok(())
+        } else {
+            Err(format!(
+                "loaded model has nparams={}, wrapper expects nparams={}",
+                self.config.nparams, expected
+            ))
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn sample_rate(&self) -> u32 {
+        self.config.sample_rate
     }
 
     pub fn reset(&mut self) {
@@ -289,11 +319,22 @@ impl TcnModel {
         self.scratch_b.fill(0.0);
     }
 
-    pub fn update_conditioning(&mut self, limit: f32, peak_reduction: f32) {
-        // gen MLP: 2 → 16 → 32 → 32 with ReLU between (and after the last).
-        self.gen_scratch_a[0] = limit;
-        self.gen_scratch_a[1] = peak_reduction;
-        let mut in_len = 2;
+    /// Refresh FiLM scale/shift for every block from the current parameter vector.
+    ///
+    /// `params.len()` must equal `self.nparams()`. Pass an empty slice for
+    /// fixed-setting models (nparams == 0).
+    pub fn update_conditioning(&mut self, params: &[f32]) {
+        let n = self.config.nparams;
+        debug_assert_eq!(
+            params.len(), n,
+            "update_conditioning: expected {} params, got {}",
+            n, params.len(),
+        );
+        // gen MLP: nparams → 16 → 32 → 32 with ReLU between (and after the last).
+        // For nparams = 0 the first layer's bias is the only signal, which matches
+        // the training-time behavior where FiLM becomes a learned per-block bias.
+        self.gen_scratch_a[..n].copy_from_slice(params);
+        let mut in_len = n;
         let mut cur_in = &mut self.gen_scratch_a;
         let mut cur_out = &mut self.gen_scratch_b;
         for layer in self.gen.iter() {
