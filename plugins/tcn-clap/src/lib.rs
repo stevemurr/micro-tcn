@@ -12,7 +12,7 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-mod model;
+pub mod model;
 use model::TcnModel;
 
 /// Directory containing the currently loaded plugin binary.
