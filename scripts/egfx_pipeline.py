@@ -142,12 +142,14 @@ def train(effect: dict, cache_dir: Path) -> Path:
     return artifact_dir
 
 
+CKPT_VAL_RE = re.compile(r"val=(\d+\.\d+)\.ckpt$")
+
+
 def best_ckpt(artifact_dir: Path) -> Path:
-    pat = re.compile(r"val=([\d.]+)")
     ckpts = list((artifact_dir / "checkpoints").glob("step=*.ckpt"))
     if not ckpts:
         raise RuntimeError(f"no checkpoints found in {artifact_dir}")
-    return min(ckpts, key=lambda p: float(pat.search(p.name).group(1)))
+    return min(ckpts, key=lambda p: float(CKPT_VAL_RE.search(p.name).group(1)))
 
 
 def scaffold_plugin(effect: dict) -> Path:
@@ -240,7 +242,7 @@ def register_plugin(effect: dict) -> None:
 
 
 def commit_push(effect: dict, best: Path, push: bool) -> None:
-    val = float(re.search(r"val=([\d.]+)", best.name).group(1))
+    val = float(CKPT_VAL_RE.search(best.name).group(1))
     slug = effect["slug"]
     msg = (
         f"Add tcn-{slug} CLAP plugin (val={val:.4f})\n\n"
