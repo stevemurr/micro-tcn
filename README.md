@@ -7,10 +7,6 @@ Efficient neural networks for real-time modeling of analog dynamic range compres
 
 </div>
 
-<div align="center">
-<img src="plots/tcn-arch.svg">
-</div>
-
 ## Setup
 
 Install dependencies with [uv](https://docs.astral.sh/uv/):
