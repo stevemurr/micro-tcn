@@ -11,4 +11,4 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 tcn-plugin-core = { path = "../tcn-plugin-core" }
-nih_plug = { workspace = true }
+clap-sys = { workspace = true }

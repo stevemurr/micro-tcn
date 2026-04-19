@@ -14,8 +14,7 @@ license = "Apache-2.0"
 authors = ["Steven Murr"]
 
 [workspace.dependencies]
-nih_plug = { git = "https://github.com/robbert-vdh/nih-plug.git" }
-nih_plug_egui = { git = "https://github.com/robbert-vdh/nih-plug.git" }
+clap-sys = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
