@@ -73,6 +73,48 @@ uv run microtcn comp \
 
 Writes the processed WAV next to the input.
 
+## EGFxSet effect pipeline
+
+`scripts/egfx_pipeline.py` runs the full download → align → train → export →
+scaffold-plugin → commit → push loop for any effect in [EGFxSet (Zenodo 7044411)](https://zenodo.org/records/7044411):
+
+```
+uv run python scripts/egfx_pipeline.py BluesDriver
+uv run python scripts/egfx_pipeline.py BluesDriver --no-push   # stop before push
+uv run python scripts/egfx_pipeline.py BluesDriver --no-commit # just train + scaffold
+```
+
+Each run is idempotent — existing datasets, caches, artifacts, and plugin
+dirs are reused. Supported effects are listed in the `EFFECTS` dict at the
+top of the script; add a new entry (slug, display name, zip filename, CLAP
+feature keyword) to run one that isn't there yet.
+
+All captures are at a single knob setting, so the trained models have
+`nparams = 0` and the generated plugins expose no knobs — see
+[plugins/README.md](plugins/README.md#special-case-nparams--0).
+
+### Trained models
+
+Direct-arch TCN, 4 blocks · k=13 · dilation-growth=10 · channel-width=32,
+20k steps at bf16 / bs=16 / lr=1e-3. Receptive field = **13 333 samples
+(~278 ms at 48 kHz)** — enough for short-tail distortions and modulations;
+stretched thin for long-decay reverbs and delays.
+
+| Effect           | Pedal modeled         | val_loss | Notes                                                     |
+| ---------------- | --------------------- | -------: | --------------------------------------------------------- |
+| TubeScreamer     | Ibanez Mini           |   0.9398 | Reference run (pre-pipeline)                              |
+| **BluesDriver**  | Boss BD-2             |   0.9617 | Clean distortion fit, on par with TS                      |
+| **RAT**          | ProCo RAT2            |   1.0256 | Distortion, slightly harder                               |
+| **Phaser**       | MXR Phase 45          |   1.0327 | Modulation tracks well (tiny L1, STFT dominates)          |
+| **Spring-Reverb**| Orange CR-60 (spring) |   1.1367 | Better than expected given the 278 ms RF                  |
+| **Chorus**       | Boss CE-3             |   1.2025 | Pitch + delay modulation is harder                        |
+| **Flanger**      | Mooer E-Lady          |   1.7031 | Fast comb filtering stretches the RF — weakest fit        |
+
+Lower val_loss = closer fit (L1 + MR-STFT magnitude). Distortions
+(BluesDriver, RAT, TubeScreamer) are the most convincing; modulation effects
+are reasonable approximations; Flanger is the one to listen-test critically —
+comb-filter sweeps likely want a deeper/longer-RF architecture.
+
 ## Citation
 
 ```

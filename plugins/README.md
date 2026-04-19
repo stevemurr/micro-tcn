@@ -8,9 +8,20 @@ plugins/
 ├── install-macos.sh         # build + install every plugin (or a subset)
 ├── tcn-plugin-core/         # shared: TcnModel runtime + model-path resolver
 ├── tcn-la2a/                # wrapper — LA2A compressor (2 knobs)
-├── tcn-tubescreamer/        # wrapper — tube-screamer distortion (0 knobs)
+├── tcn-tubescreamer/        # wrapper — Ibanez TS distortion      (0 knobs)
+├── tcn-bluesdriver/         # wrapper — Boss BD-2 Blues Driver    (0 knobs)
+├── tcn-rat/                 # wrapper — ProCo RAT2 distortion     (0 knobs)
+├── tcn-phaser/              # wrapper — MXR Phase 45              (0 knobs)
+├── tcn-chorus/              # wrapper — Boss CE-3 chorus          (0 knobs)
+├── tcn-flanger/             # wrapper — Mooer E-Lady flanger      (0 knobs)
+├── tcn-spring-reverb/       # wrapper — Orange CR-60 spring       (0 knobs)
 └── xtask/                   # `cargo xtask bundle <crate>`
 ```
+
+The fixed-setting EGFxSet wrappers (everything except `tcn-la2a`) were
+trained and scaffolded by `scripts/egfx_pipeline.py` in the repo root; see
+the [top-level README](../README.md#egfxset-effect-pipeline) for the
+results table and how to add a new one.
 
 The inference runtime (pure Rust, allocation-free at audio rate) lives in
 `tcn-plugin-core`. Each per-model wrapper only contributes a
@@ -77,6 +88,12 @@ Priority order, consulted by `tcn_plugin_core::locate_model()`:
    `plugins/<wrapper>/assets/tcn.json`.
 
 ## Adding a new per-model wrapper
+
+For EGFxSet effects (fixed-setting, 0-knob), the fastest path is
+`scripts/egfx_pipeline.py`, which does download → cache → train → export →
+scaffold → register → commit → push in one invocation. Manual procedure
+below is for anything else (knob-conditioned models, non-EGFxSet datasets,
+or custom wrapper logic).
 
 Concrete procedure (rough template — the LA2A crate is ~170 lines total):
 
