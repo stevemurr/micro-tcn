@@ -106,7 +106,10 @@ impl Plugin for TcnLa2a {
     }];
 
     const MIDI_INPUT: MidiConfig = MidiConfig::None;
-    const SAMPLE_ACCURATE_AUTOMATION: bool = true;
+    // Disable sample-accurate automation to prevent nih-plug from splitting
+    // the host buffer into sub-blocks at every automation/transport event.
+    // Once-per-buffer conditioning is already correct for this plugin.
+    const SAMPLE_ACCURATE_AUTOMATION: bool = false;
 
     type SysExMessage = ();
     type BackgroundTask = ();
@@ -198,9 +201,14 @@ impl Plugin for TcnLa2a {
         // .value() (not .smoothed.next()) because next() advances by one sample
         // per call and we call it once per buffer — would take forever to
         // actually reach the target under automation.
-        self.cond_scratch[0] = if self.params.limit.value() { 1.0 } else { 0.0 };
-        self.cond_scratch[1] = self.params.peak_reduction.value();
-        model.update_conditioning(&self.cond_scratch);
+        // Only re-run the gen MLP when params actually changed.
+        let limit = if self.params.limit.value() { 1.0f32 } else { 0.0 };
+        let peak_red = self.params.peak_reduction.value();
+        if limit != self.cond_scratch[0] || peak_red != self.cond_scratch[1] {
+            self.cond_scratch[0] = limit;
+            self.cond_scratch[1] = peak_red;
+            model.update_conditioning(&self.cond_scratch);
+        }
 
         let makeup_db = self.params.makeup_gain_db.value();
         let makeup_gain = if makeup_db > 0.01 { 10.0f32.powf(makeup_db / 20.0) } else { 1.0 };
@@ -211,7 +219,15 @@ impl Plugin for TcnLa2a {
         // Process each channel as a full block — one SGEMM call per buffer
         // instead of N individual SGEMM calls (N = buffer size).
         for ch in buffer.as_slice() {
-            in_peak = in_peak.max(ch.iter().copied().fold(0.0f32, |m, s| m.max(s.abs())));
+            let ch_peak = ch.iter().copied().fold(0.0f32, |m, s| m.max(s.abs()));
+            // Skip inference on silence (~-96 dBFS). Mirrors CLAP's
+            // CONTINUE_IF_NOT_QUIET: host stops calling after output goes
+            // quiet; neural output is near-zero for near-zero input.
+            if ch_peak < 1.5e-5 {
+                ch.fill(0.0);
+                continue;
+            }
+            in_peak = in_peak.max(ch_peak);
             model.process_block_inplace(ch);
             raw_out_peak = raw_out_peak.max(ch.iter().copied().fold(0.0f32, |m, s| m.max(s.abs())));
             if makeup_gain > 1.0001 {

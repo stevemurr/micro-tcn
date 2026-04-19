@@ -61,7 +61,8 @@ impl Plugin for TcnTubeScreamer {
     }];
 
     const MIDI_INPUT: MidiConfig = MidiConfig::None;
-    const SAMPLE_ACCURATE_AUTOMATION: bool = true;
+    // No parameters to automate; disable to prevent buffer splitting.
+    const SAMPLE_ACCURATE_AUTOMATION: bool = false;
 
     type SysExMessage = ();
     type BackgroundTask = ();
@@ -126,11 +127,16 @@ impl Plugin for TcnTubeScreamer {
             None => return ProcessStatus::Normal,
         };
 
-        // Zero-param conditioning: the gen MLP has no input, so FiLM scale/shift
-        // is purely bias-driven. Still cheap to recompute once per buffer.
+        // Zero-param model: conditioning is pure bias, never changes.
+        // Run it once on first buffer (cond_scratch stays default []).
         model.update_conditioning(&self.cond_scratch);
 
         for ch in buffer.as_slice() {
+            // Skip inference on silence (~-96 dBFS).
+            if ch.iter().all(|s| s.abs() < 1.5e-5) {
+                ch.fill(0.0);
+                continue;
+            }
             model.process_block_inplace(ch);
         }
 
