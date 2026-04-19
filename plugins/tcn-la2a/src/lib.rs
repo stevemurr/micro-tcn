@@ -9,9 +9,14 @@
 //! `update_conditioning` argument list.
 
 use nih_plug::prelude::*;
+use nih_plug_egui::{create_egui_editor, EguiState};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
 use tcn_plugin_core::{load_model, TcnModel};
+
+pub mod gui;
+use gui::MeterState;
 
 /// Baked-in default model, included at compile time so a freshly built plugin
 /// works out of the box. Runtime overrides (env var or bundle Resources/)
@@ -35,20 +40,29 @@ pub struct TcnLa2a {
     /// Scratch passed to `update_conditioning`. Reused each buffer to avoid
     /// allocating on the audio thread.
     cond_scratch: [f32; NPARAMS],
+    /// Meter peaks written by the audio thread, read by the GUI.
+    meters: Arc<MeterState>,
 }
 
 #[derive(Params)]
 pub struct TcnLa2aParams {
+    #[persist = "editor-state"]
+    pub editor_state: Arc<EguiState>,
+
     #[id = "peak_red"]
     pub peak_reduction: FloatParam,
 
     #[id = "limit"]
     pub limit: BoolParam,
+
+    #[id = "makeup_db"]
+    pub makeup_gain_db: FloatParam,
 }
 
 impl Default for TcnLa2aParams {
     fn default() -> Self {
         Self {
+            editor_state: EguiState::from_size(gui::GUI_WIDTH, gui::GUI_HEIGHT),
             peak_reduction: FloatParam::new(
                 "Peak Reduction",
                 0.5,
@@ -56,6 +70,12 @@ impl Default for TcnLa2aParams {
             )
             .with_smoother(SmoothingStyle::Linear(50.0)),
             limit: BoolParam::new("Limit", false),
+            makeup_gain_db: FloatParam::new(
+                "Makeup Gain",
+                0.0,
+                FloatRange::Linear { min: 0.0, max: 24.0 },
+            )
+            .with_unit(" dB"),
         }
     }
 }
@@ -67,6 +87,7 @@ impl Default for TcnLa2a {
             model: None,
             sample_rate: 44100.0,
             cond_scratch: [0.0; NPARAMS],
+            meters: Arc::new(MeterState::default()),
         }
     }
 }
@@ -92,6 +113,19 @@ impl Plugin for TcnLa2a {
 
     fn params(&self) -> Arc<dyn Params> {
         self.params.clone()
+    }
+
+    fn editor(&mut self, _async_executor: AsyncExecutor<Self>) -> Option<Box<dyn Editor>> {
+        let params = self.params.clone();
+        let meters = self.meters.clone();
+        create_egui_editor(
+            self.params.editor_state.clone(),
+            (),
+            |_, _| {},
+            move |ctx, setter, _state| {
+                gui::draw_ui(ctx, setter, &params, &meters);
+            },
+        )
     }
 
     fn initialize(
@@ -161,11 +195,35 @@ impl Plugin for TcnLa2a {
         self.cond_scratch[1] = self.params.peak_reduction.value();
         model.update_conditioning(&self.cond_scratch);
 
+        let makeup_db = self.params.makeup_gain_db.value();
+        let makeup_gain = if makeup_db > 0.01 { 10.0f32.powf(makeup_db / 20.0) } else { 1.0 };
+
+        let mut in_peak = 0.0f32;
+        let mut raw_out_peak = 0.0f32;
+
         for channel_samples in buffer.iter_samples() {
             for sample in channel_samples {
+                in_peak = in_peak.max(sample.abs());
                 *sample = model.process_sample(*sample);
+                raw_out_peak = raw_out_peak.max(sample.abs());
+                *sample *= makeup_gain;
             }
         }
+
+        // Fast-attack / slow-decay meter updates.
+        const DECAY: f32 = 0.95;
+        let update_peak = |atom: &AtomicU32, new: f32| {
+            let old = f32::from_bits(atom.load(Ordering::Relaxed));
+            atom.store((if new >= old { new } else { old * DECAY }).to_bits(), Ordering::Relaxed);
+        };
+        update_peak(&self.meters.input_peak, in_peak);
+        update_peak(&self.meters.output_peak, raw_out_peak * makeup_gain);
+        let gr_db = if in_peak > 1e-5 && raw_out_peak > 1e-5 {
+            20.0 * (raw_out_peak / in_peak).log10()
+        } else {
+            0.0
+        };
+        self.meters.gain_reduction.store(gr_db.to_bits(), Ordering::Relaxed);
 
         ProcessStatus::Normal
     }

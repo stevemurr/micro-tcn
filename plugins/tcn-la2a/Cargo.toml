@@ -15,3 +15,4 @@ tcn-plugin-core = { path = "../tcn-plugin-core" }
 # abort on heap allocations during `process()`, which some DAWs treat as a
 # fatal plugin fault and restart the instance in a crash loop.
 nih_plug = { workspace = true }
+nih_plug_egui = { workspace = true }
