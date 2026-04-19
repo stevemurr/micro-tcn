@@ -4,6 +4,7 @@ from typing import Optional
 import typer
 
 from microtcn.comp import compress
+from microtcn.egfx import build_egfx_cache
 from microtcn.eval import evaluate
 from microtcn.export import export_direct
 from microtcn.train import run_training
@@ -40,6 +41,10 @@ def train_cmd(
     num_workers: int = typer.Option(4),
     save_top_k: int = typer.Option(3),
     seed: int = typer.Option(42),
+    loader: Optional[str] = typer.Option(
+        None, help="Dataset loader key (e.g. 'egfx', 'signaltrain_la2a'). "
+        "Auto-detected from cache metadata if omitted."
+    ),
 ):
     """Train a TCN model."""
     run_training(
@@ -51,7 +56,7 @@ def train_cmd(
         max_steps=max_steps, warmup_steps=warmup_steps, eval_every=eval_every,
         log_every=log_every, val_max_batches=val_max_batches,
         precision=precision, num_workers=num_workers,
-        save_top_k=save_top_k, seed=seed,
+        save_top_k=save_top_k, seed=seed, loader=loader,
     )
 
 
@@ -65,12 +70,13 @@ def eval_cmd(
     num_workers: int = typer.Option(4),
     max_batches: Optional[int] = typer.Option(None, help="Cap val batches (None = all)."),
     save_json: Optional[str] = typer.Option(None, help="Dump per-class + overall metrics JSON."),
+    loader: Optional[str] = typer.Option(None, help="Dataset loader key; auto-detected from cache metadata if omitted."),
 ):
     """Evaluate a checkpoint with spectral + time-domain metrics, per-param-class."""
     evaluate(
         root_dir=root_dir, checkpoint_path=checkpoint, subset=subset,
         eval_length=eval_length, batch_size=batch_size, num_workers=num_workers,
-        max_batches=max_batches, save_json=save_json,
+        max_batches=max_batches, save_json=save_json, loader=loader,
     )
 
 
@@ -96,6 +102,23 @@ def comp_cmd(
     compress(
         checkpoint_path=checkpoint, input_path=input, output_path=output,
         limit=limit, peak_red=peak_red, device=device,
+    )
+
+
+@app.command("build-egfx")
+def build_egfx_cmd(
+    clean_dir: str = typer.Option(..., help="EGFxSet Clean/ root (5 pickup subdirs)."),
+    wet_dir: str = typer.Option(..., help="EGFxSet effect root, e.g. .../TubeScreamer"),
+    cache_dir: str = typer.Option(..., help="Output directory for the bin/index cache."),
+    val_frac: float = typer.Option(0.1),
+    seed: int = typer.Option(42),
+    max_lag: int = typer.Option(8000, help="Lag search window in samples (~±167 ms @ 48k)."),
+    min_corr: float = typer.Option(0.3, help="Drop pairs with post-align |corr| below this."),
+):
+    """Build an aligned EGFxSet train/val cache from a Clean/ + effect folder."""
+    build_egfx_cache(
+        clean_root=clean_dir, wet_root=wet_dir, cache_dir=cache_dir,
+        val_frac=val_frac, seed=seed, max_lag=max_lag, min_corr=min_corr,
     )
 
 

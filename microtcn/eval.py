@@ -6,7 +6,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from microtcn.data import SignalTrainLA2ADataset
+from microtcn.data import load_dataset
 from microtcn.metrics import all_metrics
 from microtcn.model import TCN
 from microtcn.utils import causal_crop, center_crop
@@ -41,13 +41,15 @@ def evaluate(
     num_workers: int = 4,
     max_batches: int | None = None,
     save_json: str | None = None,
+    loader: str | None = None,
 ):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, cfg = load_tcn(checkpoint_path, device)
     crop_fn = causal_crop if cfg["causal"] else center_crop
     sample_rate = cfg.get("sample_rate", 44100)
 
-    dataset = SignalTrainLA2ADataset(root_dir, subset=subset, length=eval_length)
+    dataset = load_dataset(root_dir, subset=subset, length=eval_length, loader=loader)
+    nparams = getattr(dataset, "nparams", 2)
     loader = DataLoader(dataset, batch_size=batch_size, shuffle=False,
                         num_workers=num_workers, pin_memory=True)
 
@@ -68,7 +70,10 @@ def evaluate(
                 p = pred[i:i+1]
                 t = target_c[i:i+1]
                 m = all_metrics(p, t, sample_rate=sample_rate)
-                key = f"{int(params[i, 0, 0].item())}-{int(params[i, 0, 1].item() * 100):03d}"
+                if nparams >= 2:
+                    key = f"{int(params[i, 0, 0].item())}-{int(params[i, 0, 1].item() * 100):03d}"
+                else:
+                    key = "all"
                 for mk, mv in m.items():
                     per_class[key][mk].append(mv)
                     overall[mk].append(mv)

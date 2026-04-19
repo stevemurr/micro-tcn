@@ -7,7 +7,7 @@ from pathlib import Path
 import torch
 from torch.utils.data import DataLoader
 
-from microtcn.data import SignalTrainLA2ADataset
+from microtcn.data import load_dataset
 from microtcn.loss import L1STFT
 from microtcn.model import TCN
 from microtcn.utils import causal_crop, center_crop
@@ -82,6 +82,7 @@ def run_training(
     num_workers: int = 4,
     save_top_k: int = 3,
     seed: int = 42,
+    loader: str | None = None,
 ):
     torch.manual_seed(seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -91,8 +92,9 @@ def run_training(
     ckpt_dir = out_dir / "checkpoints"
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    train_ds = SignalTrainLA2ADataset(root_dir, subset="train", length=train_length)
-    val_ds = SignalTrainLA2ADataset(root_dir, subset="val", length=eval_length)
+    train_ds = load_dataset(root_dir, subset="train", length=train_length, loader=loader)
+    val_ds = load_dataset(root_dir, subset="val", length=eval_length, loader=loader)
+    nparams = getattr(train_ds, "nparams", 2)
 
     train_loader = DataLoader(
         train_ds, batch_size=batch_size, shuffle=True,
@@ -106,6 +108,7 @@ def run_training(
     )
 
     model = TCN(
+        nparams=nparams,
         nblocks=nblocks, dilation_growth=dilation_growth,
         kernel_size=kernel_size, channel_width=channel_width, causal=causal,
         arch=arch,
@@ -125,8 +128,9 @@ def run_training(
 
     cfg = dict(
         nblocks=nblocks, dilation_growth=dilation_growth, kernel_size=kernel_size,
-        channel_width=channel_width, causal=causal, nparams=2, arch=arch,
+        channel_width=channel_width, causal=causal, nparams=nparams, arch=arch,
         sample_rate=train_ds.sample_rate,
+        dataset_type=getattr(train_ds, "dataset_type", None),
     )
     with open(out_dir / "config.json", "w") as f:
         json.dump(cfg, f, indent=2)

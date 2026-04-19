@@ -8,7 +8,7 @@ import numpy as np
 from torchcodec.decoders import AudioDecoder
 
 
-CACHE_VERSION = 1
+CACHE_VERSION = 2
 
 
 def _cache_paths(cache_dir: str, subset: str):
@@ -130,8 +130,11 @@ def _build_cache(input_files, target_files, cache_dir: str, subset: str):
 
         meta = {
             "version": CACHE_VERSION,
+            "dataset_type": "signaltrain_la2a",
             "subset": subset,
             "sample_rate": sample_rate,
+            "nparams": 2,
+            "param_names": ["limit", "peak_reduction"],
             "files": files_meta,
         }
         with open(tmp_index, "w") as f:
@@ -213,6 +216,9 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
         with open(index_path) as f:
             self.meta = json.load(f)
         self.sample_rate = self.meta["sample_rate"]
+        self.nparams = self.meta.get("nparams", 2)
+        self.param_names = self.meta.get("param_names", ["limit", "peak_reduction"])
+        self.dataset_type = self.meta.get("dataset_type", "signaltrain_la2a")
         self.input_store = np.memmap(input_bin, dtype=np.int16, mode="r")
         self.target_store = np.memmap(target_bin, dtype=np.int16, mode="r")
 
@@ -259,3 +265,113 @@ class SignalTrainLA2ADataset(torch.utils.data.Dataset):
         params[:, 1] /= 100
 
         return input_t, target_t, params
+
+
+# ---------------------------------------------------------------------------
+# Loader registry
+# ---------------------------------------------------------------------------
+
+def _egfx_factory(data_dir, subset, length, dtype):
+    from microtcn.egfx import EGFxDataset
+    return EGFxDataset(cache_dir=data_dir, subset=subset, length=length, dtype=dtype)
+
+
+def _la2a_factory(data_dir, subset, length, dtype):
+    return SignalTrainLA2ADataset(
+        root_dir=data_dir, subset=subset, length=length, dtype=dtype
+    )
+
+
+DATASET_REGISTRY: dict[str, dict] = {
+    "signaltrain_la2a": {
+        "factory": _la2a_factory,
+        "data_dir_help": "Raw SignalTrain dataset root (cache auto-built under .cache/).",
+    },
+    "egfx": {
+        "factory": _egfx_factory,
+        "data_dir_help": "Prebuilt EGFx cache directory (see `microtcn build-egfx`).",
+    },
+}
+
+
+def _read_cache_meta(data_dir: str, subset: str):
+    """Try to load subset index.json from either the dir itself or its .cache/ subdir.
+
+    Returns (meta_dict, path_used) or (None, None) if nothing is found.
+    """
+    candidates = [
+        os.path.join(data_dir, f"{subset}_index.json"),
+        os.path.join(data_dir, ".cache", f"{subset}_index.json"),
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            try:
+                with open(p) as f:
+                    return json.load(f), p
+            except (OSError, json.JSONDecodeError):
+                continue
+    return None, None
+
+
+def load_dataset(
+    data_dir: str,
+    subset: str = "train",
+    length: int = 16384,
+    *,
+    loader: str | None = None,
+    dtype: torch.dtype = torch.float32,
+):
+    """Open a dataset by auto-detecting its loader from cache metadata.
+
+    Args:
+        data_dir: dataset-specific location — raw root or prebuilt cache
+                  (see each loader's ``data_dir_help``).
+        subset: "train" | "val" | "test" | "full".
+        length: samples per example.
+        loader: optional explicit loader name, overriding metadata. Useful when
+                the cache predates the ``dataset_type`` field or to force a
+                mismatching loader for debugging.
+        dtype: returned tensor dtype.
+
+    Resolution order:
+      1. If ``loader`` is given, use it directly.
+      2. Otherwise read ``dataset_type`` from the cache's ``{subset}_index.json``.
+      3. Raise a structured error naming available loaders and how to register
+         a new one.
+    """
+    if loader is None:
+        meta, meta_path = _read_cache_meta(data_dir, subset)
+        if meta is None:
+            avail = ", ".join(sorted(DATASET_REGISTRY))
+            raise FileNotFoundError(
+                f"No dataset cache index.json found at {data_dir!r} for subset={subset!r}.\n"
+                f"Looked at: {os.path.join(data_dir, f'{subset}_index.json')} and "
+                f"{os.path.join(data_dir, '.cache', f'{subset}_index.json')}.\n"
+                f"Either build a cache first (e.g. `microtcn build-egfx --cache-dir {data_dir}`) "
+                f"or pass --loader explicitly. Available loaders: {avail}."
+            )
+        loader = meta.get("dataset_type")
+        if loader is None:
+            avail = ", ".join(sorted(DATASET_REGISTRY))
+            raise RuntimeError(
+                f"Cache at {meta_path} has no `dataset_type` field — it predates the loader registry.\n"
+                f"Fix: rebuild the cache (bump CACHE_VERSION already forces this on next run) "
+                f"or pass --loader explicitly. Available loaders: {avail}."
+            )
+
+    if loader not in DATASET_REGISTRY:
+        avail = "\n  - ".join(
+            f"{k}: {v['data_dir_help']}" for k, v in sorted(DATASET_REGISTRY.items())
+        )
+        raise ValueError(
+            f"Unknown dataset loader {loader!r}.\n"
+            f"Available loaders:\n  - {avail}\n\n"
+            f"To add a new loader:\n"
+            f"  1. Write a torch.utils.data.Dataset class (see microtcn/egfx.py EGFxDataset for a template).\n"
+            f"  2. Add an entry to DATASET_REGISTRY in microtcn/data.py with a factory callable.\n"
+            f"  3. Have your builder write `dataset_type: \"<your_key>\"` into the cache's index.json.\n"
+            f"  4. Expose `nparams` / `param_names` attributes on the Dataset so the trainer can size the model."
+        )
+
+    factory = DATASET_REGISTRY[loader]["factory"]
+    return factory(data_dir, subset, length, dtype)
