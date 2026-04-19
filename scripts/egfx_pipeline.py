@@ -69,7 +69,7 @@ EFFECTS: dict[str, dict] = {
         "slug": "spring-reverb",
         "display": "Spring Reverb",
         "zenodo": "Spring-Reverb.zip",
-        "dir": "Spring-Reverb",
+        "dir": "Spring Reverb",  # zip extracts to space-separated name
         "feature": "reverb",
         "description": "Neural Orange CR-60 spring reverb.",
     },
