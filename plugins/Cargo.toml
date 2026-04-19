@@ -4,6 +4,7 @@ members = [
     "tcn-plugin-core",
     "tcn-la2a",
     "tcn-tubescreamer",
+    "tcn-chorus",
     "tcn-phaser",
     "tcn-rat",
     "tcn-bluesdriver",
