@@ -26,7 +26,7 @@ cd "$(dirname "$0")"
 
 # Every plugin crate (any workspace member with a cdylib and an assets/ dir)
 # we know how to install. Add new plugins here once they gain a Cargo.toml.
-ALL_PLUGINS=(tcn-la2a tcn-tubescreamer tcn-bluesdriver tcn-rat tcn-phaser tcn-chorus tcn-flanger)
+ALL_PLUGINS=(tcn-la2a tcn-tubescreamer tcn-bluesdriver tcn-rat tcn-phaser tcn-chorus tcn-flanger tcn-spring-reverb)
 
 # Each plugin declares which env var it reads for its runtime model override
 # (via const MODEL_ENV_OVERRIDE in its lib.rs). Keep this table in sync.
@@ -34,6 +34,7 @@ env_var_for () {
     case "$1" in
         tcn-la2a)         echo "TCN_LA2A_MODEL" ;;
         tcn-tubescreamer) echo "TCN_TUBESCREAMER_MODEL" ;;
+        tcn-spring-reverb) echo "TCN_SPRING_REVERB_MODEL" ;;
         tcn-flanger) echo "TCN_FLANGER_MODEL" ;;
         tcn-chorus) echo "TCN_CHORUS_MODEL" ;;
         tcn-phaser) echo "TCN_PHASER_MODEL" ;;
